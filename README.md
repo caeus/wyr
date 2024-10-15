@@ -13,7 +13,7 @@
 To install Wyr, run:
 
 ```bash
-npm install --save wyr-js
+npm install --save wyr-ts
 ```
 ## Basic Usage
 
@@ -21,7 +21,7 @@ npm install --save wyr-js
 Wyr uses modules to define bindings. Each binding has a unique key and a creator that builds the dependency.
 
 ```typescript
-import Wyr, { BindingKey } from 'wyr-js';
+import Wyr, { BindingKey } from 'wyr-ts';
 
 // Create a new module
 const module = Wyr.module();

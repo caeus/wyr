@@ -1,5 +1,5 @@
 {
-  "name": "wyr-js",
+  "name": "wyr-ts",
   "version": "0.1.0",
   "description": "",
   "main": "dist/index.js",
@@ -11,7 +11,12 @@
     "format": "prettier --write 'src/**/*.ts'"
   },
   "keywords": [],
-  "author": "",
+  "files": [
+    "dist/index.js",
+    "dist/index.d.ts",
+    "LICENCSE"
+  ],
+  "author": "caeus",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.7.5",
