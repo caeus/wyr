@@ -1,35 +1,55 @@
 export interface BindingConstraint<T> {}
 
 export type BindingKey<T> = symbol & BindingConstraint<T>;
+type BindingKeys = BindingKey<unknown>[]
+type UParams = unknown[]
+type UAsyncBuilder<out T> = (...params: UParams) => Promise<T>;
+type Fun2R<Params extends UParams,R> = (...params: Params) => Promise<R>|R
+type Class2R<Params extends UParams,R> = new (...params: Params) => R
 export type Creator<out T> = {
-  deps: BindingKey<unknown>[];
-  create: (...params: unknown[]) => Promise<T>;
+  deps: BindingKeys;
+  create: UAsyncBuilder<T>
 };
-namespace Creator {
-  export function from<Deps extends BindingKey<unknown>[]>(
-    ...deps: Deps
-  ): <R>(create: (...params: DepsToParams<Deps>) => Promise<R>) => Creator<R> {
-    return <R>(create: (...params: DepsToParams<Deps>) => Promise<R>) => ({
-      deps,
-      create: create as (...params: unknown[]) => Promise<R>,
-    });
-  }
-}
 // Type Function... gets [A,B,C] from [BindingKey<A>,BindingKey<B>,BindingKey<C>]
-type DepsToParams<Deps extends BindingKey<unknown>[]> = Deps extends [
-  BindingKey<infer To>,
-  ...infer Tail extends BindingKey<unknown>[],
-]
-  ? [To, ...DepsToParams<Tail>]
-  : Deps extends []
-    ? []
-    : Deps extends BindingKey<infer Of>[] ? Of[] : never;
+type DepsToParams<Deps extends BindingKeys> = Deps extends [
+    BindingKey<infer To>,
+    ...infer Tail extends BindingKeys,
+  ]
+    ? [To, ...DepsToParams<Tail>]
+    : Deps extends []
+      ? []
+      : Deps extends BindingKey<infer Of>[] ? Of[] : never;
+
+namespace Creator {
+  export function fromFun<Deps extends BindingKeys,R>(
+    deps: Deps,
+    fun: Fun2R<DepsToParams<Deps>,R>
+  ): Creator<R> {
+    return {
+        deps,
+        async create(...params):Promise<R>{
+            return fun(...(params as DepsToParams<Deps>))
+        }
+    }
+  }
+  export function fromClass<Deps extends BindingKeys,R>(deps:Deps,clazz:Class2R<DepsToParams<Deps>,R>)
+  : Creator<R> {
+    return {
+        deps,
+        async create(...params):Promise<R>{
+            return new clazz(...(params as DepsToParams<Deps>))
+        }
+    }
+  }
+  
+}
+
 export class Container {
   private instances: Record<symbol, Promise<unknown>> = {};
   constructor(private bindings: Record<symbol, Creator<unknown>> = {}) {}
   private async obtain<T>(
     key: BindingKey<T>,
-    trace: BindingKey<unknown>[],
+    trace: BindingKeys,
   ): Promise<T> {
     if (key in this.instances) {
       return this.instances[key] as Promise<T>;
@@ -49,7 +69,7 @@ export class Container {
     this.instances[key] = instance;
     return instance as Promise<T>;
   }
-  async get<Keys extends BindingKey<unknown>[]>(
+  async get<Keys extends BindingKeys>(
     ...keys: Keys
   ): Promise<DepsToParams<Keys>> {
     return Promise.all(keys.map((key) => this.obtain(key, []))) as Promise<
@@ -57,16 +77,27 @@ export class Container {
     >;
   }
 }
+export interface Binder<T>{
+    to(creator:Creator<T>):Module
+    toFun<Deps extends BindingKeys>(deps:Deps,fun:Fun2R<DepsToParams<Deps>,T>):Module
+    toClass<Deps extends BindingKeys>(deps:Deps,fun:Class2R<DepsToParams<Deps>,T>):Module
+}
 
 export class Module {
   constructor(private bindings: Record<symbol, Creator<unknown>> = {}) {}
-  bind<T>(key: BindingKey<T>): { to: (creator: Creator<T>) => Module } {
+  bind<T>(key: BindingKey<T>): Binder<T> {
     const self = this;
     return {
       to(creator: Creator<T>): Module {
         const newLocal = { ...self.bindings, [key]: creator };
         return new Module(newLocal);
       },
+      toFun<Deps extends BindingKeys>(deps:Deps,fun:Fun2R<DepsToParams<Deps>,T>):Module{
+        return this.to(Creator.fromFun(deps,fun))
+      },
+      toClass<Deps extends BindingKeys>(deps:Deps,clazz:Class2R<DepsToParams<Deps>,T>):Module{
+        return this.to(Creator.fromClass(deps,clazz))
+      }
     };
   }
   mergeWith(other: Module): Module {
@@ -88,7 +119,7 @@ export namespace Wyr {
   export function module() {
     return new Module();
   }
-  export const creator = Creator.from;
+  export const creator = Creator.fromFun
 }
 export const container = Wyr.container;
 export const module = Wyr.module;

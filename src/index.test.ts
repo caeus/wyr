@@ -23,7 +23,7 @@ suite('Module', () => {
     const key: BindingKey<string> = Symbol('string');
     const module = Wyr.module()
       .bind(key)
-      .to(Wyr.creator()(async () => 'Hello'));
+      .to(Wyr.creator([],async () => 'Hello'));
 
     const container = Wyr.container(module);
     const [string] = await container.get(key);
@@ -33,10 +33,10 @@ suite('Module', () => {
     const key: BindingKey<string> = Symbol('string');
     const module0 = Wyr.module()
       .bind(key)
-      .to(Wyr.creator()(async () => 'Hello'));
+      .to(Wyr.creator([],async () => 'Hello'));
     const module1 = Wyr.module()
       .bind(key)
-      .to(Wyr.creator()(async () => 'Hola'));
+      .to(Wyr.creator([],async () => 'Hola'));
 
     const container = Wyr.container(module0, module1);
     const [string] = await container.get(key);
@@ -46,10 +46,10 @@ suite('Module', () => {
     const key: BindingKey<string> = Symbol('string');
     const module0 = Wyr.module()
       .bind(key)
-      .to(Wyr.creator()(async () => 'Hello'));
+      .to(Wyr.creator([],async () => 'Hello'));
     const module1 = Wyr.module()
       .bind(key)
-      .to(Wyr.creator()(async () => 'Hola'));
+      .to(Wyr.creator([],async () => 'Hola'));
 
     const container = module0.mergeWith(module1).asContainer();
     const [string] = await container.get(key);
@@ -59,7 +59,7 @@ suite('Module', () => {
     const key: BindingKey<string> = Symbol('string');
     const module0 = Wyr.module()
       .bind(key)
-      .to(Wyr.creator(key)(async (str) => str));
+      .to(Wyr.creator([key],async (str) => str));
     const container = Wyr.container(module0);
     await expect(container.get(key)).rejects.toThrow();
   });
@@ -71,7 +71,7 @@ suite('Module', () => {
     for (const key of keys) {
       _module = _module
         .bind(key)
-        .to(Wyr.creator()(async () => 
+        .to(Wyr.creator([],async () => 
             new Promise(resolve=>setTimeout(resolve,500,key.description ?? ''))
             
     ));
@@ -80,7 +80,7 @@ suite('Module', () => {
     const key: BindingKey<string> = Symbol('string');
     const module = _module
       .bind(key)
-      .to(Wyr.creator(...keys)(async (...ss) => ss.join('')));
+      .to(Wyr.creator(keys,async (...ss) => ss.join('')));
     const container = Wyr.container(module);
     const start = +new Date()
     const [value] =  await container.get(key)
