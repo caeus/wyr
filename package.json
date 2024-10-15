@@ -1,6 +1,6 @@
 {
   "name": "wyr-ts",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -14,7 +14,8 @@
   "files": [
     "dist/index.js",
     "dist/index.d.ts",
-    "LICENCSE"
+    "LICENCSE",
+    "README.md"
   ],
   "author": "caeus",
   "license": "MIT",
