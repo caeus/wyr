@@ -32,25 +32,13 @@ const userEventEmitterKey: BindingKey<UserEventEmitter> = Symbol('UserEventEmitt
 const userServiceKey: BindingKey<UserService> = Symbol('UserService');
 
 // Bind the UserEventEmitter
-module.bind(userEventEmitterKey).to(
-  Wyr.creator()(async () => {
-    return new UserEventEmitter();
-  })
-);
+module.bind(userEventEmitterKey).toClass([],UserEventEmitter);
 
 // Bind the UserRepo
-module.bind(userRepoKey).to(
-  Wyr.creator()(async (userEventEmitter) => {
-    return new UserRepo(userEventEmitter);
-  })
-);
+module.bind(userRepoKey).toClass([],UserRepo);
 
 // Bind the  UserService that depends on UserRepo and UserEventEmitter
-module.bind(userServiceKey).to(
-  Wyr.creator(userRepoKey, userEventEmitterKey)(async (userRepo, userEventEmitter) => {
-    return new UserService(userRepo, userEventEmitter);
-  })
-);
+module.bind(userServiceKey).toClass([userRepoKey, userEventEmitterKey],UserService);
 
 // Create a container from the module
 const container = module.asContainer();
