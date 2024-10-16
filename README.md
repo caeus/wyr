@@ -52,8 +52,10 @@ userService.performAction();
 ```
 #### Explanation:
 **Binding Keys**: userRepoKey, loggerKey, and userServiceKey uniquely identify each service.
-**Creators**: The UserService is created with its dependencies (UserRepo and UserEventEmitter) using the Wyr.creator(userRepoKey, userEventEmitterKey) function.
-**Retrieving Dependencies**: Multiple keys can be passed to container.get(...) to retrieve a tuple of dependencies, in this case UserService and UserEventEmitter.
+
+**Creators**: Internally we bind keys to creators. Creators are but a reified version of a function, in which each param is associated with a key (and a known type)
+
+**Retrieving Dependencies**: Multiple keys can be passed to `container.get(...)` to retrieve a tuple of dependencies, in this case UserService and UserEventEmitter.
 
 #### Merging Modules
 Sometimes it comes in handy to group multiple bindings into a module, and create a container out of multiple modules.
