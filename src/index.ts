@@ -1,7 +1,7 @@
 export interface BindingConstraint<T> {}
 
 export type BindingKey<T> = symbol & BindingConstraint<T>;
-type BindingKeys = BindingKey<unknown>[]
+type BindingKeys = [...BindingKey<unknown>[]]
 type UParams = unknown[]
 type UAsyncBuilder<out T> = (...params: UParams) => Promise<T>;
 type Fun2R<Params extends UParams,R> = (...params: Params) => Promise<R>|R
@@ -10,40 +10,42 @@ export type Creator<out T> = {
   deps: BindingKeys;
   create: UAsyncBuilder<T>
 };
+type DerefOne<T extends BindingKey<unknown>> = T extends BindingKey<infer R>?R:never
 // Type Function... gets [A,B,C] from [BindingKey<A>,BindingKey<B>,BindingKey<C>]
-type DepsToParams<Deps extends BindingKeys> = Deps extends [
+type DerefMany<Deps extends BindingKeys> = Deps extends [
     BindingKey<infer To>,
     ...infer Tail extends BindingKeys,
   ]
-    ? [To, ...DepsToParams<Tail>]
+    ? [To, ...DerefMany<Tail>]
     : Deps extends []
       ? []
       : Deps extends BindingKey<infer Of>[] ? Of[] : never;
 
 namespace Creator {
-  export function fromFun<Deps extends BindingKeys,R>(
-    deps: Deps,
-    fun: Fun2R<DepsToParams<Deps>,R>
+  export function fromFun<Keys extends BindingKeys,R>(
+    deps: [...Keys],
+    fun: Fun2R<DerefMany<Keys>,R>
   ): Creator<R> {
     return {
         deps,
         async create(...params):Promise<R>{
-            return fun(...(params as DepsToParams<Deps>))
+            return fun(...(params as DerefMany<Keys>))
         }
     }
   }
-  export function fromClass<Deps extends BindingKeys,R>(deps:Deps,clazz:Class2R<DepsToParams<Deps>,R>)
+  export function fromClass<Keys extends BindingKeys,R>(deps:[...Keys],clazz:Class2R<DerefMany<Keys>,R>)
   : Creator<R> {
     return {
         deps,
         async create(...params):Promise<R>{
-            return new clazz(...(params as DepsToParams<Deps>))
+            return new clazz(...(params as DerefMany<Keys>))
         }
     }
-  }
-  
+  } 
 }
-
+type OneOrMore<T> = T | [...T[]]
+type DerefOneOrMore<T extends OneOrMore<BindingKey<unknown>>> = T extends [...infer Keys extends BindingKeys]? DerefMany<Keys>
+: T extends BindingKey<infer R> ? R : never
 export class Container {
   private instances: Record<symbol, Promise<unknown>> = {};
   constructor(private bindings: Record<symbol, Creator<unknown>> = {}) {}
@@ -69,18 +71,22 @@ export class Container {
     this.instances[key] = instance;
     return instance as Promise<T>;
   }
-  async get<Keys extends BindingKeys>(
-    ...keys: Keys
-  ): Promise<DepsToParams<Keys>> {
-    return Promise.all(keys.map((key) => this.obtain(key, []))) as Promise<
-      DepsToParams<Keys>
-    >;
+  get<T>(key:BindingKey<T>):Promise<T>
+  get<Keys extends BindingKeys>(keys:[...Keys]):Promise<DerefMany<[...Keys]>>
+  async get<Keys extends OneOrMore<BindingKey<unknown>>>(
+    keys:Keys
+  ): Promise<DerefOneOrMore<Keys>> {
+    if(Array.isArray(keys)){
+      return Promise.all(keys.map((key) => this.obtain(key, []))) as Promise<
+      DerefOneOrMore<Keys>>
+    }else return this.obtain(keys,[])
   }
 }
 export interface Binder<T>{
     to(creator:Creator<T>):Module
-    toFun<Deps extends BindingKeys>(deps:Deps,fun:Fun2R<DepsToParams<Deps>,T>):Module
-    toClass<Deps extends BindingKeys>(deps:Deps,fun:Class2R<DepsToParams<Deps>,T>):Module
+    toFun<Deps extends BindingKeys>(deps:[...Deps],fun:Fun2R<DerefMany<Deps>,T>):Module
+    toClass<Deps extends BindingKeys>(deps:[...Deps],fun:Class2R<DerefMany<Deps>,T>):Module
+    toValue(value:T):Module
 }
 
 export class Module {
@@ -92,12 +98,15 @@ export class Module {
         const newLocal = { ...self.bindings, [key]: creator };
         return new Module(newLocal);
       },
-      toFun<Deps extends BindingKeys>(deps:Deps,fun:Fun2R<DepsToParams<Deps>,T>):Module{
+      toFun<Deps extends BindingKeys>(deps:[...Deps],fun:Fun2R<DerefMany<Deps>,T>):Module{
         return this.to(Creator.fromFun(deps,fun))
       },
-      toClass<Deps extends BindingKeys>(deps:Deps,clazz:Class2R<DepsToParams<Deps>,T>):Module{
+      toClass<Deps extends BindingKeys>(deps:[...Deps],clazz:Class2R<DerefMany<Deps>,T>):Module{
         return this.to(Creator.fromClass(deps,clazz))
-      }
+      },
+      toValue(value):Module {
+        return this.to(Creator.fromFun([],async()=>value))
+      },
     };
   }
   mergeWith(other: Module): Module {
@@ -119,7 +128,8 @@ export namespace Wyr {
   export function module() {
     return new Module();
   }
-  export const creator = Creator.fromFun
+  export const reifyFun = Creator.fromFun
+  export const reifyClass = Creator.fromClass
 }
 export const container = Wyr.container;
 export const module = Wyr.module;
