@@ -1,14 +1,14 @@
 {
   "name": "wyr-ts",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/caeys/wyr.git"
+    "url": "git+https://github.com/caeus/wyr.git"
   },
-  "homepage": "https://github.com/caeys/wyr#readme",
+  "homepage": "https://github.com/caeus/wyr#readme",
   "scripts": {
     "test": "vitest",
     "build": "tsc",
