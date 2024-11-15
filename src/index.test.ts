@@ -1,22 +1,6 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { expect, suite, test } from 'vitest';
 import { BindingKey, Wyr } from '.';
-
-type TCO<T> =
-  | {
-      pending: true;
-      continue: () => TCO<T>;
-    }
-  | {
-      pending: false;
-      value: T;
-    };
-function unfold<T>(tco: TCO<T>): T {
-  let value = tco;
-  while (value.pending) {
-    value = value.continue();
-  }
-  return value.value;
-}
 
 suite('Module', () => {
   test('retrieve binding', async () => {
@@ -69,6 +53,7 @@ suite('Module', () => {
       obj: { x: number },
       arr: [string, string],
     ): number {
+      console.log(num, obj, arr);
       return 0;
     }
     const nk: BindingKey<number> = Symbol('nk');

@@ -13,7 +13,8 @@
     "test": "vitest",
     "build": "tsc",
     "lint": "eslint 'src/**/*.ts'",
-    "format": "prettier --write 'src/**/*.ts'"
+    "format": "prettier --write 'src/**/*.ts'",
+    "docs": "typedoc"
   },
   "keywords": [
     "di",
