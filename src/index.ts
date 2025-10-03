@@ -86,8 +86,8 @@ export type Missing<
         ? {
             [ok]: false;
             [data]: {
-              [message]: `Cyclical dependency`;
-              involving: { [P in Picked]: Components[P] };
+              [message]: `Circular dependency`;
+              involving: { [P in Seen]: Components[P] };
             };
           } // Branch B1 (condition: `Picked` already tracked in `Seen`) → cycle detected
         : Missing<
@@ -135,7 +135,9 @@ type MissingEval<
         : [ResultData] extends [infer Errs & ValidKey]
           ? MissingError<Message, Context, Errs & ValidKey>
           : MissingUnexpected<Context>
-      : MissingUnexpected<Result & { hola: 5 }>
+      : [Result] extends [{ [ok]: false; [data]: infer ErrorData }]
+        ? ErrorData
+        : MissingUnexpected<Result>
   ) extends infer R
     ? R extends Success
       ? Success

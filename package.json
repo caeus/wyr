@@ -1,6 +1,6 @@
 {
   "name": "wyr-ts",
-  "version": "0.1.8",
+  "version": "0.2.0-rc0",
   "description": "",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -9,13 +9,6 @@
     "url": "git+https://github.com/caeus/wyr.git"
   },
   "homepage": "https://github.com/caeus/wyr#readme",
-  "scripts": {
-    "test": "vitest",
-    "build": "tsc -p tsconfig.build.json",
-    "lint": "eslint 'src/**/*.ts'",
-    "format": "prettier --write 'src/**/*.ts'",
-    "docs": "typedoc"
-  },
   "keywords": [
     "di",
     "inversion of control container",
