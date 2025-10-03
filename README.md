@@ -1,69 +1,115 @@
-# Wyr
+# 🕸️ wyr  
+> A type-safe dependency planner for TypeScript.  
+> No containers. No singletons. Just explicit graphs and compile-time guarantees.
 
-**Pronounced**: _wire_  
-**Wyr** is a zero-crap, zero-dependency, lightweight, and typesafe dependency injection framework for TypeScript. It’s designed to be simple yet powerful, with full support for asynchronous bindings.
+---
 
-## Features
+### Why *wyr*?  
+Most DI frameworks hide too much.  
+They mutate containers, rely on decorators, and produce runtime surprises.  
 
-- **Typesafe**: Enjoy TypeScript’s type safety when defining and retrieving dependencies.
-- **Async Bindings**: First class support for async initialization and parallelization of initialization.
-- **Thread-safe**: Modules are immutable and can be shared safely.
+**wyr** is different.  
+It’s **stateless**, **immutable**, and **transparent**.  
+You describe the graph; the compiler ensures it’s valid — no missing deps, no cycles.  
+At runtime, wyr wires exactly what you ask for — **fresh**, **deterministic**, **parallel**.
 
-## Installation
+---
 
-To install Wyr, run:
+### 🧠 Core ideas
 
-```bash
-npm install --save wyr-ts
-```
-## Core concepts
+| Concept | Description |
+|----------|--------------|
+| **Registry** | Immutable set of bindings — no containers, no state. |
+| **Graph** | Typed dependencies, checked at compile time, never cyclic. |
+| **Wire** | Ask for what you need; wyr figures out the order automatically. |
+| **Parallelism** | Independent nodes wire in parallel for speed. |
+| **Type Safety** | The compiler guarantees all dependencies exist and match. |
+| **Determinism** | Same graph, same result — always reproducible. |
 
-### Modules
 
-A **Module** is where bindings are defined. You can create a module using `Wyr.module()`, which will create an empty module.
-Modules are lightweight, immutable, and can be merged with other modules to combine bindings.
-```typescript
-const userModule = Wyr.module()
-    .bind(UserService.key).toClass([UserRepo.key,UserEventEmitter.key],DefaultUserService)
-    .bind(UserEventEmitter.key).toFun([KafkaFactory.key,DefaultUserEventEmitter.Config.key],createUserEventEmitter)
-    .bind(UserRepo.key).toClass([MongoDatabase.key,MongoUserRepo.Config.key],MongoUserRepo)
-```
-### Containers
-A **Container** is created from a module and is used to initialize and retrieve dependencies. Once you've defined bindings in multiple modules, you can get a container from it, to access the bound dependencies.
-You cannot bind dependencies to a container, they have to be bound to a module.
+---
 
-```typescript
-const container = Wyr.container(userModule,mongoModule,kafkaModule,httpModule)
-//or
-const container = userModule.mergedWith(mongoModule).mergedWith(kafkaModule).mergedWith(httpModule).asContainer()
-```
+### ⚡ Example
 
-### Binding keys
-A **Bindking Key** is a unique identifier for each dependency.. You can create them using `Symbol` and a type annotation which ensures uniqueness and type safety
+```ts
+type logger$ = typeof logger$, cfg$ = typeof cfg$, db$ = typeof db$, repo$ = typeof repo$, api$ = typeof api$
 
-```typescript
-namespace UserService{
-    const key:BindingKey<UserService> = Symbol('UserService')
+declare global {
+  interface Services {
+    [logger$]: Console
+    [cfg$]: { url: string }
+    [db$]: { query: (s: string) => unknown }
+    [repo$]: ReturnType<typeof makeRepo>
+    [api$]: ReturnType<typeof makeApi>
+  }
+
 }
+const reg = Wyr()
+  .bind(logger$).toValue(console)
+  .bind(cfg$).toValue({ url: "postgres://..." })
+  .bind(db$).toFunction([cfg$], cfg => openDb(cfg.url))
+  .bind(repo$).toFunction([db$, logger$], (db, log) => makeRepo(db, log))
+  .bind(api$).toFunction([repo$, logger$], (r, log) => makeApi(r, log))
+
+// parallel by level, deterministic
+const api = await reg.wire(api$)
+const [repo, api2] = await reg.wireTuple([repo$, api$])
+const rec = await reg.wireRecord({ repo: repo$, api: api$, db: db$ })
 ```
-### Bindings
-A **Binding** connects a binding key to a dependency (ie, a way to build it using other dependencies). You can bind a key to a dependency using `module.bind(key).toClass` or `module.bind(key).toFun` or `module.bind(key).toValue`.
-Modules are immutable, so whenever you bind something, it will return a new module with the new binding in it. So it's important you chain bindings.
-```typescript
-const userModule = Wyr.module()
-    .bind(UserService.key).toClass([UserRepo.key,UserEventEmitter.key],DefaultUserService)
-    .bind(UserEventEmitter.key).toFun([KafkaFactory.key,DefaultUserEventEmitter.Config.key],createUserEventEmitter)
-    .bind(UserRepo.key).toClass([MongoDatabase.key,MongoUserRepo.Config.key],MongoUserRepo)
-```
-### Retrieving dependencies.
-You can retrieve dependencies from a container using the `.get` method. this method takes a key, or a tuple of keys, and will return a promise with the dependency, or a tuple of dependencies.
-Tuple semantics were added to be able to leverage parallelization of initialization.
-```typescript
-const userService = await container.get(UserService.key) 
-// OR
-const [userService,kafkaFactory] = await container.get([UserService.key,KafkaFactory.key])
+✅ Type errors for missing deps  
+✅ Compile-time cycle detection  
+✅ Parallel execution per level  
+✅ No shared memory or hidden caching  
+
+---
+
+### 🧩 Composition
+
+Registries are composable.  
+You can merge, extend, or bind constants — all immutably.
+
+```ts
+const core = Wyr().bind(cfg$).toValue({ url: "postgres://..." })
+const feature = Wyr().bind(repo$).toFunction([cfg$], makeRepo)
+const app = core.merge(feature)
 ```
 
-### License
+Every registry is **just data**.  
+You can diff it, snapshot it, or reuse it.
 
-Wyr is licensed under the MIT License.
+---
+
+### 🧭 Philosophy
+
+- **Explicitness** — nothing is hidden, nothing is implicit  
+- **Immutability** — registries never mutate; merges create new ones  
+- **Determinism** — same graph, same plan, same result  
+- **Transparency** — the wiring plan is visible and predictable  
+- **Statelessness** — no containers, no caches, no lifetimes  
+
+---
+
+### 🧱 wyr vs DI
+
+| | Classic DI | wyr |
+|---|---|---|
+| Container | ✅ | 🚫 |
+| Singletons | ✅ | 🚫 |
+| Hidden state | ✅ | 🚫 |
+| Compile-time checks | ❌ | ✅ |
+| Parallel build | ❌ | ✅ |
+| Immutability | ❌ | ✅ |
+
+---
+
+### 🧪 Status  
+Early but functional.  
+Type-level validation is stable.  
+Runtime planner is deterministic and parallel.  
+Finalizers and teardown semantics are under design — they’ll just be nodes in the graph.
+
+---
+
+### 💬 Inspiration  
+Build systems, graph planners, and the belief that **explicit beats magical**.  
+wyr wires what you ask for — nothing more, nothing less.
