@@ -309,21 +309,18 @@ class InternalWyr<
 > implements Wyr<Graph>
 {
   constructor(private readonly registry: UDepGraph = {}) {}
-  missing<const K extends ValidKey>(): Set<Missing<K, Graph> & ValidKey> {
-    throw new Error('missing() is a compile-time helper only');
-  }
 
   bind<K extends keyof Components>(k: K): Binder<K, Graph> {
     return new Binder<K, Graph>(k, this.registry);
   }
 
-  merge<const D2 extends DepGraph<D2>>(
-    other: Wyr<D2>,
-  ): Wyr<Simplify<Omit<Graph, keyof D2> & D2>> {
+  merge<const Graph2 extends DepGraph<Graph2>>(
+    other: Wyr<Graph2>,
+  ): Wyr<Simplify<Omit<Graph, keyof Graph2> & Graph2>> {
     return new InternalWyr({
       ...this.registry,
-      ...(other as InternalWyr<D2>).registry,
-    }) as Wyr<Simplify<Omit<Graph, keyof D2> & D2>>;
+      ...(other as InternalWyr<Graph2>).registry,
+    }) as Wyr<Simplify<Omit<Graph, keyof Graph2> & Graph2>>;
   }
 
   async wireTuple<
@@ -377,9 +374,9 @@ export interface Wyr<
   Graph extends DepGraph<Graph> = Simplify<Record<never, never>>,
 > {
   bind<K extends keyof Components>(k: K): Binder<K, Graph>;
-  merge<const D2 extends DepGraph<D2>>(
-    other: Wyr<D2>,
-  ): Wyr<Simplify<Omit<Graph, keyof D2> & D2>>;
+  merge<const Graph2 extends DepGraph<Graph2>>(
+    other: Wyr<Graph2>,
+  ): Wyr<Simplify<Omit<Graph, keyof Graph2> & Graph2>>;
   wireTuple<
     const Keys extends readonly ValidKey[],
     Guard extends ResolvableTuple<Keys, Graph>,

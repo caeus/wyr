@@ -5,7 +5,7 @@ build: lint test
 
 test:
 	# Vitest uses tsconfig.json unless explicitly pointed elsewhere.
-	npx vitest
+	npx vitest run
 
 lint:
 	npx eslint 'src/**/*.ts'
