@@ -32,7 +32,11 @@ At runtime, wyr wires exactly what you ask for — **fresh**, **deterministic**,
 ### ⚡ Example
 
 ```ts
-type logger$ = typeof logger$, cfg$ = typeof cfg$, db$ = typeof db$, repo$ = typeof repo$, api$ = typeof api$
+type logger$ = typeof logger$
+type cfg$ = typeof cfg$
+type db$ = typeof db$,
+type repo$ = typeof repo$
+type api$ = typeof api$
 
 declare global {
   interface Services {
@@ -56,7 +60,8 @@ const api = await reg.wire(api$)
 const [repo, api2] = await reg.wireTuple([repo$, api$])
 const rec = await reg.wireRecord({ repo: repo$, api: api$, db: db$ })
 ```
-✅ Type errors for missing deps  
+
+✅ Descriptive Type errors for missing deps  
 ✅ Compile-time cycle detection  
 ✅ Parallel execution per level  
 ✅ No shared memory or hidden caching  
