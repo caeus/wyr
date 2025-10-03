@@ -1,6 +1,5 @@
-# 🕸️ wyr  
-> A type-safe dependency planner for TypeScript.  
-> No containers. No singletons. Just explicit graphs and compile-time guarantees.
+# wyr – Deterministic Dependency Graphs for TypeScript
+> Build explicit dependency graphs with compile-time guarantees and predictable runtime wiring.
 
 ---
 
