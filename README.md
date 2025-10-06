@@ -1,4 +1,7 @@
 # wyr – Deterministic Dependency Graphs for TypeScript
+
+![wyr logo](./wyr_logo.png)
+
 > Build explicit dependency graphs with compile-time guarantees and predictable runtime wiring.
 
 ---
