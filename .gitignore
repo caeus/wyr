@@ -110,6 +110,9 @@ dist
 # Docusaurus cache and generated files
 .docusaurus
 
+# Local clone of the GitHub wiki
+wyr.wiki/
+
 # Serverless directories
 .serverless/
 

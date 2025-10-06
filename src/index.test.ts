@@ -118,6 +118,34 @@ describe('Wyr', () => {
 
     await expect(failing.wire(str_bool$)).rejects.toThrow(kaboom);
   });
+  test('snapshot materializes keys into value bindings', async () => {
+    let strInvocations = 0;
+
+    const base = Wyr()
+      .bind(bool$)
+      .toValue(true)
+      .bind(str$)
+      .toFunction([bool$], async (exlamation) => {
+        strInvocations += 1;
+        if (exlamation) {
+          return 'Hola!';
+        }
+        return 'hi';
+      });
+
+    const snap = await base.snapshot(str$, bool$);
+
+    expect(strInvocations).toBe(1);
+    await expect(snap.wire(str$)).resolves.toBe('Hola!');
+    await expect(snap.wire(bool$)).resolves.toBe(true);
+
+    await snap.wire(str$);
+    expect(strInvocations).toBe(1);
+
+    await expect(snap.wire(num$ as never)).rejects.toThrow(
+      /No binding registered for key/i,
+    );
+  });
   test('bind.toClass wires class constructors', async () => {
     const module = Wyr()
       .bind(bool$)

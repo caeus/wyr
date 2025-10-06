@@ -18,7 +18,7 @@ export type KeysTuple<Ks> = Ks extends readonly ValidKey[]
     : Ks
   : TErr<'Expected a tuple of bound symbols'>;
 
-export type DepGraph<D> = {
+export type GraphLike<D> = {
   [K in keyof D & ValidKey]: D[K];
 };
 
@@ -71,7 +71,7 @@ type MissingResult = TEither<ValidKey>;
 
 export type Missing<
   Keys extends ValidKey,
-  Graph extends DepGraph<Graph>,
+  Graph extends GraphLike<Graph>,
   Result extends MissingResult = {
     [ok]: true;
     [data]: never;
@@ -147,7 +147,7 @@ type MissingEval<
 
 export type Resolvable<
   Key extends ValidKey,
-  Graph extends DepGraph<Graph>,
+  Graph extends GraphLike<Graph>,
 > = MissingEval<
   Missing<Key, Graph>,
   Key,
@@ -157,7 +157,7 @@ export type Resolvable<
 
 export type ResolvableTuple<Keys extends readonly ValidKey[], Graph> =
   MissingEval<
-    Missing<Keys[number], DepGraph<Graph>>,
+    Missing<Keys[number], GraphLike<Graph>>,
     Keys,
     `Unresolvable tuple`,
     { keys: Keys }
@@ -173,7 +173,7 @@ export type ResolvedTuple<Keys extends readonly ValidKey[]> = {
 
 export type ResolvableRecord<Map extends Record<string, ValidKey>, Graph> =
   MissingEval<
-    Missing<Map[keyof Map], DepGraph<Graph>>,
+    Missing<Map[keyof Map], GraphLike<Graph>>,
     Map,
     `Unresolvable record`,
     { map: Map }
@@ -195,7 +195,7 @@ type UDepGraph = Partial<Record<PropertyKey, UBinding>>;
 
 export class Binder<
   Key extends keyof Components,
-  Graph extends DepGraph<Graph>,
+  Graph extends GraphLike<Graph>,
 > {
   constructor(
     private readonly key: Key,
@@ -232,7 +232,9 @@ export class Binder<
       ...this.registry,
       [keyValue]: binding,
     };
-    return new InternalWyr<Record<never, never>>(nextRegistry) as Wyr<
+    return new InternalWyr<Record<never, never>>(
+      nextRegistry,
+    ) as unknown as Wyr<
       Simplify<
         Omit<Graph, Key> & {
           [_ in Key]: { [t in keyof Deps & number]: Deps[t] }[keyof Deps &
@@ -305,22 +307,47 @@ const wire = (reg: UDepGraph, keys: readonly ValidKey[]): UContainer => {
 };
 
 class InternalWyr<
-  Graph extends DepGraph<Graph> = Simplify<Record<never, never>>,
+  Graph extends GraphLike<Graph> = Simplify<Record<never, never>>,
 > implements Wyr<Graph>
 {
   constructor(private readonly registry: UDepGraph = {}) {}
+  async snapshot<
+    const Keys extends readonly ValidKey[],
+    Guard extends ResolvableTuple<Keys, Graph>,
+  >(
+    ...keys: Guard extends Keys ? Keys : [Guard]
+  ): Promise<
+    Wyr<{
+      [K in Keys[number]]: never;
+    }>
+  > {
+    const tuple = keys as Keys;
+    const resolved = await this.wireTuple(tuple as never);
+
+    const registry: UDepGraph = {};
+    tuple.forEach((key, index) => {
+      registry[key as unknown as PropertyKey] = {
+        deps: [],
+        factory: async (): Promise<unknown> => resolved[index],
+      };
+    });
+
+    return new InternalWyr(registry) as unknown as Wyr<{
+      [K in Keys[number]]: never;
+    }>;
+  }
 
   bind<K extends keyof Components>(k: K): Binder<K, Graph> {
     return new Binder<K, Graph>(k, this.registry);
   }
 
-  merge<const Graph2 extends DepGraph<Graph2>>(
+  merge<const Graph2 extends GraphLike<Graph2>>(
     other: Wyr<Graph2>,
   ): Wyr<Simplify<Omit<Graph, keyof Graph2> & Graph2>> {
     return new InternalWyr({
       ...this.registry,
-      ...(other as InternalWyr<Graph2>).registry,
-    }) as Wyr<Simplify<Omit<Graph, keyof Graph2> & Graph2>>;
+      ...(other as unknown as InternalWyr<Graph2>).registry,
+    }) as unknown as Wyr<Simplify<Omit<Graph, keyof Graph2> & Graph2>>;
   }
 
   async wireTuple<
@@ -371,10 +398,10 @@ class InternalWyr<
 }
 
 export interface Wyr<
-  Graph extends DepGraph<Graph> = Simplify<Record<never, never>>,
+  Graph extends GraphLike<Graph> = Simplify<Record<never, never>>,
 > {
   bind<K extends keyof Components>(k: K): Binder<K, Graph>;
-  merge<const Graph2 extends DepGraph<Graph2>>(
+  merge<const Graph2 extends GraphLike<Graph2>>(
     other: Wyr<Graph2>,
   ): Wyr<Simplify<Omit<Graph, keyof Graph2> & Graph2>>;
   wireTuple<
@@ -392,7 +419,17 @@ export interface Wyr<
   wire<const Key extends ValidKey, Guard extends Resolvable<Key, Graph>>(
     k: Guard extends Key ? Key : Guard,
   ): Promise<Components[Key]>;
+  snapshot<
+    const Keys extends readonly ValidKey[],
+    Guard extends ResolvableTuple<Keys, Graph>,
+  >(
+    ...keys: Guard extends Keys ? Keys : [Guard]
+  ): Promise<
+    Wyr<{
+      [K in Keys[number]]: never;
+    }>
+  >;
 }
 
 export const Wyr = (): Wyr<Record<never, never>> =>
-  new InternalWyr({}) as Wyr<Record<never, never>>;
+  new InternalWyr({}) as unknown as Wyr<Record<never, never>>;
