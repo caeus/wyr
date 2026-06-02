@@ -1,435 +1,330 @@
-declare const message: unique symbol;
-declare const ok: unique symbol;
-declare const err: unique symbol;
+type Empty = Record<never, never> & {};
+type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
-export type TErr<T extends string> = string extends T
-  ? never
-  : { readonly [message]: T };
-export type Ok<T> = { readonly [ok]: T };
-export type Err<Msg extends string, Ctx extends object> = {
-  readonly [err]: { readonly message: Msg; readonly ctx: Ctx };
-};
-export type Result = Ok<unknown> | Err<string, object>;
+// ─── Provider ────────────────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface Components {}
-export type ValidKey = keyof Components;
-export type Key = PropertyKey;
+// A Provider encodes its dependency record (In) and what it produces (Out).
+// Variance is explicit: In is contravariant (consumed), Out is covariant (produced).
+// Backed by a factory function and a dep key set for runtime resolution.
+class Provider<in In extends Empty, out Out> {
+  readonly deps: ReadonlySet<keyof In>;
+  readonly #factory: (deps: In) => Promise<Out>;
 
-export type Param<From extends Key = Key, A = unknown> = {
-  readonly from: From;
-  readonly a: A;
-};
-export type Provider<
-  Provides = unknown,
-  Requires extends readonly Param[] = readonly Param[],
-> = {
-  readonly provides: Provides;
-  readonly requires: Requires;
-};
-export type AnyGraph = Partial<Record<Key, Provider>>;
+  constructor(
+    deps: ReadonlySet<keyof In>,
+    factory: (deps: In) => Promise<Out>,
+  ) {
+    this.deps = deps;
+    this.#factory = factory;
+  }
 
-export type Simplify<T> = { [K in keyof T]: T[K] } & {};
+  call(deps: In): Promise<Out> {
+    return this.#factory(deps);
+  }
+}
+type AnyProvider = Provider<never, unknown>;
+type ProviderIn<P extends AnyProvider> =
+  P extends Provider<infer I, unknown> ? I : never; // never is good error here
+type ProviderOut<P extends AnyProvider> =
+  P extends Provider<never, infer O> ? O : unknown; // unknown is better than never
 
-export type KeysTuple<Ks> = Ks extends readonly ValidKey[]
-  ? number extends Ks['length']
-    ? TErr<'Expected a tuple of bound symbols'>
-    : Ks
-  : TErr<'Expected a tuple of bound symbols'>;
+// ─── Graph ───────────────────────────────────────────────────────────────────
 
-export type KeysToTypes<Ks> = Ks extends readonly ValidKey[]
-  ? {
-      [I in keyof Ks]: Ks[I] extends ValidKey ? Components[Ks[I]] : never;
-    }
-  : TErr<'Expected a tuple of bound symbols'>[];
+type AnyGraph = Record<PropertyKey, AnyProvider>;
+type ProvidersToGraph<Providers extends Record<PropertyKey, AnyProvider>> =
+  Simplify<{
+    readonly [K in keyof Providers]: Providers[K];
+  }>;
 
-type ParamsFromKeys<Ks extends readonly ValidKey[]> = Ks extends readonly []
-  ? readonly []
-  : Ks extends readonly [
-        infer Head extends ValidKey,
-        ...infer Tail extends readonly ValidKey[],
-      ]
-    ? readonly [Param<Head, Components[Head]>, ...ParamsFromKeys<Tail>]
-    : readonly Param[];
+// ─── Builder helpers ─────────────────────────────────────────────────────────
 
-type BindingFor<
-  K extends ValidKey,
-  Deps extends readonly ValidKey[],
-> = Provider<Components[K], ParamsFromKeys<Deps>>;
-
-export type GraphLike<D> = {
-  readonly [K in keyof D & ValidKey]: D[K] extends Provider
-    ? D[K]
-    : D[K] extends readonly ValidKey[]
-      ? BindingFor<K, D[K]>
-      : Provider<Components[K], readonly []>;
-};
-
-type WireableParam<G extends AnyGraph, P extends Param, Trace extends Key> =
-  Wireable<G, P['from'], Trace> extends Ok<infer Got>
-    ? Got extends P['a']
-      ? Ok<Got>
-      : Err<'type mismatch', { key: P['from']; expected: P['a']; got: Got }>
-    : Err<
-        'failed to resolve param',
-        {
-          from: P['from'];
-          expected: P['a'];
-          cause: Wireable<G, P['from'], Trace>;
-        }
-      >;
-
-export type WireableParams<
-  G extends AnyGraph,
-  Ps extends readonly Param[],
-  Trace extends Key,
-> = Ps extends readonly []
-  ? Ok<unknown>
-  : Ps extends readonly [
-        infer Head extends Param,
-        ...infer Tail extends readonly Param[],
-      ]
-    ? WireableParam<G, Head, Trace> extends Ok<unknown>
-      ? WireableParams<G, Tail, Trace>
-      : WireableParam<G, Head, Trace>
-    : Err<'unreachable', { params: Ps }>;
-
-export type Wireable<
-  G extends AnyGraph,
-  K extends Key,
-  Trace extends Key = never,
-> = K extends Trace
-  ? Err<'circular dependency', { key: K; trace: Trace }>
-  : K extends keyof G
-    ? G[K] extends Provider<
-        infer Provides,
-        infer Requires extends readonly Param[]
-      >
-      ? WireableParams<G, Requires, Trace | K> extends Ok<unknown>
-        ? Ok<Provides>
-        : WireableParams<G, Requires, Trace | K>
-      : Err<'unreachable', { key: K }>
-    : Err<'missing key', { key: K }>;
-
-export type WireableTuple<
-  G extends AnyGraph,
-  Keys extends readonly Key[],
+// Zip a const key tuple with the param types of a function into a dep record.
+// Duplicate keys collapse via intersection (intended).
+type ZipKeysToParams<
+  Keys extends readonly PropertyKey[],
+  Params extends readonly unknown[],
 > = Keys extends readonly []
-  ? Ok<readonly []>
+  ? Empty
   : Keys extends readonly [
-        infer Head extends Key,
-        ...infer Tail extends readonly Key[],
+        infer K extends PropertyKey,
+        ...infer KTail extends readonly PropertyKey[],
       ]
-    ? Wireable<G, Head> extends Ok<infer Provides>
-      ? WireableTuple<G, Tail> extends Ok<infer Rest extends readonly unknown[]>
-        ? Ok<readonly [Provides, ...Rest]>
-        : WireableTuple<G, Tail>
-      : Wireable<G, Head>
-    : Err<'unreachable', { keys: Keys }>;
+    ? Params extends readonly [
+        infer P,
+        ...infer PTail extends readonly unknown[],
+      ]
+      ? { readonly [_ in K]: P } & ZipKeysToParams<KTail, PTail>
+      : Empty
+    : Empty;
 
+export const toValue = <const T>(value: T | Promise<T>): Provider<Empty, T> =>
+  new Provider(new Set(), async () => value);
+
+export const toFactory = <
+  const Keys extends readonly PropertyKey[],
+  const Out,
+  const Params extends { readonly [I in keyof Keys]: unknown },
+>(
+  keys: Keys,
+  fn: (...args: Params) => Promise<Out> | Out,
+): Provider<Simplify<ZipKeysToParams<Keys, Params>>, Out> =>
+  new Provider(
+    new Set(keys) as unknown as ReadonlySet<
+      keyof Simplify<ZipKeysToParams<Keys, Params>>
+    >,
+    async (deps) =>
+      fn(
+        ...(keys.map(
+          (k) => (deps as Record<PropertyKey, unknown>)[k],
+        ) as unknown as Params),
+      ),
+  ) as unknown as Provider<Simplify<ZipKeysToParams<Keys, Params>>, Out>;
+
+export const toClass = <
+  const Keys extends readonly PropertyKey[],
+  const Out,
+  const Params extends { readonly [I in keyof Keys]: unknown },
+>(
+  keys: Keys,
+  ctor: new (...args: Params) => Out,
+): Provider<Simplify<ZipKeysToParams<Keys, Params>>, Out> =>
+  toFactory(keys, async (...args: Params) => new ctor(...args));
+
+// ─── Result ──────────────────────────────────────────────────────────────────
+
+declare const _ok: unique symbol;
+declare const _err: unique symbol;
+
+type Ok<T> = { readonly [_ok]: T };
+type Err<Msg extends string, Ctx extends object = Empty> = {
+  readonly [_err]: { readonly message: Msg; readonly ctx: Ctx };
+};
+
+// ─── Wireable ────────────────────────────────────────────────────────────────
+
+// Pure mapper — delegates every check to WireableKey<..., Expected>.
+// Produces a union of Ok | Err across all dep keys, then:
+//   - if every member is Ok → collapse to Ok<unknown>
+//   - otherwise → strip the Ok members and bubble the Err(s)
+type WireableDeps<
+  Graph extends AnyGraph,
+  Deps extends Empty,
+  Trace extends readonly PropertyKey[],
+> = [keyof Deps] extends [never]
+  ? Ok<unknown> // no deps — trivially satisfied
+  : {
+        [K in keyof Deps]: WireableKey<Graph, K & PropertyKey, Trace, Deps[K]>;
+      }[keyof Deps] extends infer R
+    ? [R] extends [Ok<unknown>]
+      ? Ok<unknown> // all deps passed — every mapped key returned Ok
+      : Exclude<R, Ok<unknown>> // some deps failed — strip Ok members, surface only the Errs
+    : Err<'unreachable', object>; // infer always succeeds; this branch never fires
+
+// DFS reachability check for a single key K.
+// Expected: the type the caller requires from K's output — checked before recursing into deps.
+// Trace is a tuple of keys visited so far — preserves insertion order for readable cycle errors.
+// Returns Ok<Out> if fully resolvable, Err otherwise.
+type WireableKey<
+  Graph extends AnyGraph,
+  K extends PropertyKey,
+  Trace extends readonly PropertyKey[] = readonly [],
+  Expected = unknown,
+> = K extends Trace[number]
+  ? Err<'circular dependency', { key: K; trace: Trace }> // K already in the call stack
+  : K extends keyof Graph
+    ? ProviderOut<Graph[K]> extends Expected
+      ? WireableDeps<
+          Graph,
+          ProviderIn<Graph[K]>,
+          readonly [...Trace, K]
+        > extends infer Deps
+        ? Deps extends Ok<unknown>
+          ? Ok<ProviderOut<Graph[K]>> // all deps resolved, carry the provided type up
+          : Deps extends Err<string, object>
+            ? Deps // bubble dep errors
+            : Err<'unreachable', object> // WireableDeps always returns Ok|Err; this branch never fires
+        : Err<'unreachable', object> // infer always succeeds; this branch never fires
+      : Err<
+          'type mismatch',
+          {
+            key: K;
+            expected: Expected;
+            got: ProviderOut<Graph[K]>;
+            trace: Trace;
+          }
+        >
+    : Err<'missing key', { key: K; trace: Trace }>; // key not in graph at all
+
+// ─── Wireable tuple + record helpers ─────────────────────────────────────────
+
+// Walk a const tuple of keys left-to-right, accumulate Ok<[P1, P2, ...]>.
+// Short-circuits on the first unwireable key.
+type WireableTuple<
+  Graph extends AnyGraph,
+  Keys extends readonly PropertyKey[],
+> = Keys extends readonly []
+  ? Ok<readonly []> // base case: empty tuple
+  : Keys extends readonly [
+        infer K extends PropertyKey,
+        ...infer Rest extends readonly PropertyKey[],
+      ]
+    ? WireableKey<Graph, K> extends Ok<infer P>
+      ? WireableTuple<Graph, Rest> extends Ok<
+          infer Tail extends readonly unknown[]
+        >
+        ? Ok<readonly [P, ...Tail]> // prepend resolved head onto tail
+        : WireableTuple<Graph, Rest> // tail failed, bubble
+      : WireableKey<Graph, K> // head failed, bubble
+    : Err<'unreachable', { keys: Keys }>; // unreachable: Keys is always a known tuple
+
+// For a record Map: string name → Key, collect any Err across all values.
+// If none, Ok<{ name: Provides }>.
 type WireableRecordErrors<
-  G extends AnyGraph,
-  Map extends Record<string, Key>,
+  Graph extends AnyGraph,
+  Map extends Record<string, PropertyKey>,
 > = {
-  [Name in keyof Map]: Wireable<G, Map[Name]> extends Ok<unknown>
+  [Name in keyof Map]: WireableKey<Graph, Map[Name]> extends Ok<unknown>
     ? never
-    : Wireable<G, Map[Name]>;
+    : WireableKey<Graph, Map[Name]>;
 }[keyof Map];
 
-export type WireableRecord<
-  G extends AnyGraph,
-  Map extends Record<string, Key>,
-> = [WireableRecordErrors<G, Map>] extends [never]
+type WireableRecord<
+  Graph extends AnyGraph,
+  Map extends Record<string, PropertyKey>,
+> = [WireableRecordErrors<Graph, Map>] extends [never]
   ? Ok<{
-      readonly [Name in keyof Map]: Wireable<G, Map[Name]> extends Ok<infer P>
+      readonly [Name in keyof Map]: WireableKey<Graph, Map[Name]> extends Ok<
+        infer P
+      >
         ? P
         : never;
     }>
-  : WireableRecordErrors<G, Map>;
+  : Simplify<WireableRecordErrors<Graph, Map>>;
 
-export type Missing<
-  Keys extends ValidKey,
-  Graph extends AnyGraph,
-> = WireableTuple<Graph, readonly [Keys]>;
-export type LastOf<U> = U;
+// ─── Container ───────────────────────────────────────────────────────────────
 
-export type Resolvable<Key extends ValidKey, Graph extends AnyGraph> =
-  Wireable<Graph, Key> extends Ok<unknown> ? Key : Wireable<Graph, Key>;
+// Dispatches to the right Wireable check based on the shape of the input:
+//   PropertyKey           → WireableKey   → Ok<Out>
+//   readonly PropertyKey[]→ WireableTuple → Ok<[P1, P2, ...]>
+//   Record<string, Key>   → WireableRecord→ Ok<{ name: P }>
+type WireableInput<Graph extends AnyGraph, T> = T extends PropertyKey
+  ? WireableKey<Graph, T & PropertyKey>
+  : T extends readonly PropertyKey[]
+    ? WireableTuple<Graph, T>
+    : T extends Record<string, PropertyKey>
+      ? WireableRecord<Graph, T>
+      : Err<'invalid input', { got: T }>;
 
-export type ResolvableTuple<
-  Keys extends readonly ValidKey[],
-  Graph extends AnyGraph,
-> =
-  WireableTuple<Graph, Keys> extends Ok<unknown>
-    ? Keys
-    : WireableTuple<Graph, Keys>;
+// Extracts the resolved value type from a successful WireableInput result.
+type WireableOutput<Graph extends AnyGraph, T> =
+  WireableInput<Graph, T> extends Ok<infer R> ? R : unknown;
 
-export type ResolvedTuple<Keys extends readonly ValidKey[]> = {
-  readonly [Index in keyof Keys]: Components[Keys[Index] & ValidKey];
+interface Module<Graph extends AnyGraph> {
+  // Single unified wire — dispatches on input shape.
+  // Guard encodes the Wireable result; if Err it leaks into the input position, surfacing at the call site.
+  wire<
+    const T extends
+      | PropertyKey
+      | readonly PropertyKey[]
+      | Record<string, PropertyKey>,
+    Guard extends WireableInput<Graph, T>,
+  >(
+    input: Guard extends Ok<unknown> ? T : Guard,
+  ): Promise<WireableOutput<Graph, T>>;
+}
+
+type URegistry = Record<PropertyKey, AnyProvider>;
+type UContainer = Map<PropertyKey, Promise<unknown>>;
+
+// Resolves a single key from the registry, memoising into container.
+// Throws at runtime if a key is missing or a cycle is detected — the type
+// system prevents both, so these are last-resort guards only.
+const resolve = async (
+  key: PropertyKey,
+  registry: URegistry,
+  container: UContainer,
+  trace: readonly PropertyKey[],
+): Promise<unknown> => {
+  const cached = container.get(key);
+  if (cached) return cached;
+
+  const provider = registry[key];
+  if (!provider)
+    throw new Error(`No provider registered for key: ${String(key)}`);
+  if (trace.includes(key)) {
+    const cycle = [...trace, key].map(String).join(' → ');
+    throw new Error(`Circular dependency detected: ${cycle}`);
+  }
+
+  const nextTrace = [...trace, key];
+  // Build the deps record by resolving each dep declared on the provider.
+  const promise = Promise.all(
+    [...provider.deps].map(
+      async (depKey) =>
+        [
+          depKey,
+          await resolve(depKey, registry, container, nextTrace),
+        ] as const,
+    ),
+  ).then((entries) => provider.call(Object.fromEntries(entries) as never));
+
+  container.set(key, promise);
+  return promise;
 };
 
-export type ResolvableRecord<
-  Map extends Record<string, ValidKey>,
-  Graph extends AnyGraph,
-> =
-  WireableRecord<Graph, Map> extends Ok<unknown>
-    ? Map
-    : WireableRecord<Graph, Map>;
+class InternalModule<Graph extends AnyGraph> implements Module<Graph> {
+  readonly #registry: URegistry;
 
-export type ResolvedRecord<Map extends Record<string, ValidKey>> = {
-  readonly [Name in keyof Map]: Components[Map[Name] & ValidKey];
-};
+  constructor(registry: URegistry) {
+    this.#registry = registry;
+  }
 
-type UBinding = {
-  readonly deps: readonly ValidKey[];
-  readonly factory: (...args: unknown[]) => Promise<unknown>;
-};
-type UDepGraph = Partial<Record<PropertyKey, UBinding>>;
-type UContainer = Partial<Record<PropertyKey, Promise<unknown>>>;
+  wire<
+    const T extends
+      | PropertyKey
+      | readonly PropertyKey[]
+      | Record<string, PropertyKey>,
+    Guard extends WireableInput<Graph, T>,
+  >(
+    input: Guard extends Ok<unknown> ? T : Guard,
+  ): Promise<WireableOutput<Graph, T>>;
+  wire(keyOrKeysOrMap: unknown): Promise<unknown> {
+    // Each wire call gets its own container — deps resolved together share memoisation within the call.
+    const container: UContainer = new Map();
 
-type NextGraph<
-  Graph extends AnyGraph,
-  K extends ValidKey,
-  Deps extends readonly ValidKey[],
-> = Simplify<Omit<Graph, K> & { readonly [_ in K]: BindingFor<K, Deps> }>;
-
-type MergeGraph<Graph extends AnyGraph, Graph2 extends AnyGraph> = GraphLike<
-  Simplify<{
-    readonly [K in
-      | Exclude<keyof Graph, keyof Graph2>
-      | keyof Graph2]: K extends keyof Graph2
-      ? Graph2[K]
-      : K extends keyof Graph
-        ? Graph[K]
-        : never;
-  }>
->;
-
-const describeKey = (key: PropertyKey): string => {
-  const value = key as unknown as PropertyKey;
-  return typeof value === 'symbol'
-    ? (value.description ?? value.toString())
-    : String(value);
-};
-
-export class Binder<Key extends ValidKey, Graph extends AnyGraph> {
-  constructor(
-    private readonly key: Key,
-    private readonly registry: UDepGraph,
-  ) {}
-
-  toFunction<const Deps extends readonly ValidKey[]>(
-    deps: number extends Deps['length']
-      ? TErr<'Expected a tuple of bound symbols'>
-      : readonly [...Deps],
-    impl: (
-      ...args: KeysToTypes<Deps>
-    ) => Promise<Components[Key]> | Awaited<Components[Key]>,
-  ): Wyr<NextGraph<Graph, Key, Deps>> {
-    const keyValue = this.key as unknown as PropertyKey;
-    if (Object.prototype.hasOwnProperty.call(this.registry, keyValue)) {
-      throw new Error(`Key ${describeKey(this.key)} is already bound`);
+    // Single key
+    if (
+      typeof keyOrKeysOrMap === 'string' ||
+      typeof keyOrKeysOrMap === 'symbol'
+    ) {
+      return resolve(keyOrKeysOrMap, this.#registry, container, []);
     }
-
-    const depsList = [...(deps as readonly ValidKey[])];
-    const binding: UBinding = {
-      deps: depsList,
-      factory: async (...args): Promise<unknown> =>
-        impl(...(args as KeysToTypes<Deps>)),
-    };
-    const nextRegistry: UDepGraph = {
-      ...this.registry,
-      [keyValue]: binding,
-    };
-
-    return new InternalWyr(nextRegistry) as unknown as Wyr<
-      NextGraph<Graph, Key, Deps>
-    >;
-  }
-
-  toValue(value: Components[Key]): Wyr<NextGraph<Graph, Key, readonly []>> {
-    return this.toFunction([], async (): Promise<Components[Key]> => value);
-  }
-
-  toClass<const Deps extends readonly ValidKey[]>(
-    deps: number extends Deps['length']
-      ? TErr<'Expected a tuple of bound symbols'>
-      : readonly [...Deps],
-    impl: new (...args: KeysToTypes<Deps>) => Components[Key],
-  ): Wyr<NextGraph<Graph, Key, Deps>> {
-    return this.toFunction(
-      deps,
-      async (...args: KeysToTypes<Deps>): Promise<Components[Key]> =>
-        new impl(...args),
-    );
+    // Tuple of keys
+    if (Array.isArray(keyOrKeysOrMap)) {
+      return Promise.all(
+        (keyOrKeysOrMap as PropertyKey[]).map((k) =>
+          resolve(k, this.#registry, container, []),
+        ),
+      );
+    }
+    // Record of name → key
+    const map = keyOrKeysOrMap as Record<string, PropertyKey>;
+    return Promise.all(
+      Object.entries(map).map(
+        async ([name, key]) =>
+          [name, await resolve(key, this.#registry, container, [])] as const,
+      ),
+    ).then(Object.fromEntries);
   }
 }
 
-const makeContainer = (
-  reg: UDepGraph,
-  keys: readonly ValidKey[],
-): UContainer => {
-  const container: UContainer = {};
+export const Module = <
+  const Providers extends Record<PropertyKey, AnyProvider>,
+>(
+  providers: Providers,
+): Module<ProvidersToGraph<Providers>> =>
+  new InternalModule(providers) as unknown as Module<
+    ProvidersToGraph<Providers>
+  >;
 
-  const resolve = (
-    key: ValidKey,
-    trace: readonly ValidKey[],
-  ): Promise<unknown> => {
-    const index = key as unknown as PropertyKey;
-    const cached = container[index];
-    if (cached) {
-      return cached;
-    }
-
-    const binding = reg[index];
-    if (!binding) {
-      throw new Error(`No binding registered for key ${describeKey(key)}`);
-    }
-    if (trace.includes(key)) {
-      const cycle = [...trace, key].map(describeKey).join(' -> ');
-      throw new Error(`Circular dependency detected: ${cycle}`);
-    }
-
-    const promise = Promise.all(
-      binding.deps.map((dep) => resolve(dep, [...trace, key])),
-    ).then((deps) => binding.factory(...deps));
-    container[index] = promise;
-    return promise;
-  };
-
-  keys.forEach((key) => resolve(key, []));
-  return container;
-};
-
-class InternalWyr<Graph extends AnyGraph = Record<never, never>>
-  implements Wyr<Graph>
-{
-  constructor(private readonly registry: UDepGraph = {}) {}
-
-  bind<K extends ValidKey>(k: K): Binder<K, Graph> {
-    return new Binder<K, Graph>(k, this.registry);
-  }
-
-  merge<const Graph2 extends AnyGraph>(
-    other: Wyr<Graph2>,
-  ): Wyr<MergeGraph<Graph, Graph2>> {
-    return new InternalWyr({
-      ...this.registry,
-      ...(other as unknown as InternalWyr<Graph2>).registry,
-    }) as unknown as Wyr<MergeGraph<Graph, Graph2>>;
-  }
-
-  async wire<const K extends ValidKey, Guard extends Wireable<Graph, K>>(
-    key: Guard extends Ok<unknown> ? K : Guard,
-  ): Promise<Guard extends Ok<infer Provides> ? Provides : unknown> {
-    const wireKey = key as unknown as ValidKey;
-    const container = makeContainer(this.registry, [wireKey]);
-    const value = container[wireKey as unknown as PropertyKey];
-    if (!value) {
-      throw new Error(`Key ${describeKey(wireKey)} not wired`);
-    }
-    return (await value) as Guard extends Ok<infer Provides>
-      ? Provides
-      : unknown;
-  }
-
-  async wireTuple<
-    const Keys extends readonly ValidKey[],
-    Guard extends WireableTuple<Graph, Keys>,
-  >(
-    keys: Guard extends Ok<unknown> ? Keys : Guard,
-  ): Promise<Guard extends Ok<infer Provides> ? Simplify<Provides> : unknown> {
-    const tuple = keys as unknown as readonly ValidKey[];
-    const container = makeContainer(this.registry, tuple);
-    const promises = tuple.map((key, index) => {
-      const value = container[key as unknown as PropertyKey];
-      if (!value) {
-        throw new Error(`Key at position ${index} is not wired`);
-      }
-      return value;
-    });
-    return Promise.all(promises) as Promise<
-      Guard extends Ok<infer Provides> ? Simplify<Provides> : unknown
-    >;
-  }
-
-  async wireRecord<
-    const Map extends Record<string, ValidKey>,
-    Guard extends WireableRecord<Graph, Map>,
-  >(
-    map: Guard extends Ok<unknown> ? Map : Guard,
-  ): Promise<Guard extends Ok<infer Provides> ? Simplify<Provides> : unknown> {
-    const record = map as unknown as Map;
-    const container = makeContainer(
-      this.registry,
-      Object.values(record) as ValidKey[],
-    );
-    const entries = await Promise.all(
-      Object.entries(record).map(async ([name, key]) => {
-        const result =
-          container[key as unknown as PropertyKey] ??
-          Promise.reject(new Error(`Key ${String(name)} not wired`));
-        return [name, await result] as const;
-      }),
-    );
-    return Object.fromEntries(entries) as Guard extends Ok<infer Provides>
-      ? Simplify<Provides>
-      : unknown;
-  }
-
-  async snapshot<
-    const Keys extends readonly ValidKey[],
-    Guard extends WireableTuple<Graph, Keys>,
-  >(
-    ...keys: Guard extends Ok<unknown> ? Keys : [Guard]
-  ): Promise<
-    Wyr<{ readonly [K in Keys[number]]: BindingFor<K, readonly []> }>
-  > {
-    const tuple = keys as unknown as Keys;
-    const resolved = await this.wireTuple(tuple as never);
-
-    const registry: UDepGraph = {};
-    tuple.forEach((key, index) => {
-      registry[key as unknown as PropertyKey] = {
-        deps: [],
-        factory: async (): Promise<unknown> =>
-          (resolved as readonly unknown[])[index],
-      };
-    });
-
-    return new InternalWyr(registry) as unknown as Wyr<{
-      readonly [K in Keys[number]]: BindingFor<K, readonly []>;
-    }>;
-  }
-}
-
-export interface Wyr<Graph extends AnyGraph = Record<never, never>> {
-  bind<K extends ValidKey>(k: K): Binder<K, Graph>;
-  merge<const Graph2 extends AnyGraph>(
-    other: Wyr<Graph2>,
-  ): Wyr<MergeGraph<Graph, Graph2>>;
-  wire<const K extends ValidKey, Guard extends Wireable<Graph, K>>(
-    key: Guard extends Ok<unknown> ? K : Guard,
-  ): Promise<Guard extends Ok<infer Provides> ? Provides : unknown>;
-  wireTuple<
-    const Keys extends readonly ValidKey[],
-    Guard extends WireableTuple<Graph, Keys>,
-  >(
-    keys: Guard extends Ok<unknown> ? Keys : Guard,
-  ): Promise<Guard extends Ok<infer Provides> ? Simplify<Provides> : unknown>;
-  wireRecord<
-    const Map extends Record<string, ValidKey>,
-    Guard extends WireableRecord<Graph, Map>,
-  >(
-    map: Guard extends Ok<unknown> ? Map : Guard,
-  ): Promise<Guard extends Ok<infer Provides> ? Simplify<Provides> : unknown>;
-  snapshot<
-    const Keys extends readonly ValidKey[],
-    Guard extends WireableTuple<Graph, Keys>,
-  >(
-    ...keys: Guard extends Ok<unknown> ? Keys : [Guard]
-  ): Promise<Wyr<{ readonly [K in Keys[number]]: BindingFor<K, readonly []> }>>;
-}
-
-export const Wyr = (): Wyr<Record<never, never>> =>
-  new InternalWyr({}) as unknown as Wyr<Record<never, never>>;
+// ─── Playground ──────────────────────────────────────────────────────────────

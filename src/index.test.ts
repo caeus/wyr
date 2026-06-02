@@ -1,13 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { Wyr } from '.';
+import { Module } from '.';
 
-const bool$: unique symbol = Symbol('bool');
-const num$: unique symbol = Symbol('num');
-const str$: unique symbol = Symbol('str');
-const str_bool$: unique symbol = Symbol('str_bool');
-const greeter$: unique symbol = Symbol('greeter');
-
-class Greeter {
   constructor(
     private readonly message: string,
     private readonly excited: boolean,
@@ -18,15 +11,7 @@ class Greeter {
   }
 }
 
-declare module '.' {
-  interface Components {
-    [bool$]: boolean;
-    [num$]: number;
-    [str$]: string;
-    [str_bool$]: [string, boolean];
-    [greeter$]: Greeter;
-  }
-}
+
 
 export const module0 = Wyr().bind(bool$).toValue(true);
 export const module1 = Wyr()
