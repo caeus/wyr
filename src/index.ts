@@ -219,6 +219,15 @@ type WireableInput<Graph extends AnyGraph, T> = T extends PropertyKey
 type WireableOutput<Graph extends AnyGraph, T> =
   WireableInput<Graph, T> extends Ok<infer R> ? R : unknown;
 
+// Builds a lean graph containing only the snapshotted keys, each replaced with a
+// depless Provider carrying the resolved output type — all upstream deps are gone.
+type SnapshotGraph<
+  Graph extends AnyGraph,
+  Keys extends readonly PropertyKey[],
+> = {
+  [K in Keys[number] & keyof Graph]: Provider<Empty, ProviderOut<Graph[K]>>;
+};
+
 interface Module<Graph extends AnyGraph> {
   // Single unified wire — dispatches on input shape.
   // Guard encodes the Wireable result; if Err it leaks into the input position, surfacing at the call site.
@@ -231,6 +240,17 @@ interface Module<Graph extends AnyGraph> {
   >(
     input: Guard extends Ok<unknown> ? T : Guard,
   ): Promise<WireableOutput<Graph, T>>;
+  override<NewGraph extends AnyGraph>(
+    module: Module<NewGraph>,
+  ): Module<Omit<Graph, keyof NewGraph> & NewGraph>;
+  // Resolves the given keys (sharing one memoised container), then returns a new
+  // Module containing only those keys as depless providers seeded with the values.
+  snapshot<
+    const Keys extends readonly (keyof Graph)[],
+    Guard extends WireableTuple<Graph, Keys>,
+  >(
+    keys: Guard extends Ok<unknown> ? Keys : Guard,
+  ): Promise<Module<SnapshotGraph<Graph, Keys>>>;
 }
 
 type URegistry = Record<PropertyKey, AnyProvider>;
@@ -278,6 +298,39 @@ class InternalModule<Graph extends AnyGraph> implements Module<Graph> {
   constructor(registry: URegistry) {
     this.#registry = registry;
   }
+  override<NewGraph extends AnyGraph>(
+    module: Module<NewGraph>,
+  ): Module<Omit<Graph, keyof NewGraph> & NewGraph> {
+    const newRegistry = {
+      ...this.#registry,
+      ...(module as InternalModule<NewGraph>).#registry,
+    };
+    return new InternalModule(newRegistry) as unknown as Module<
+      Omit<Graph, keyof NewGraph> & NewGraph
+    >;
+  }
+
+  snapshot<
+    const Keys extends readonly (keyof Graph)[],
+    Guard extends WireableTuple<Graph, Keys>,
+  >(
+    keys: Guard extends Ok<unknown> ? Keys : Guard,
+  ): Promise<Module<SnapshotGraph<Graph, Keys>>>;
+  snapshot(keys: readonly PropertyKey[]): Promise<unknown> {
+    const container: UContainer = new Map();
+    const promise = Promise.all(
+      keys.map(
+        async (k) =>
+          [k, await resolve(k, this.#registry, container, [])] as const,
+      ),
+    ).then((entries) => {
+      const registry = Object.fromEntries(
+        entries.map(([k, v]) => [k, toValue(v)]),
+      );
+      return new InternalModule(registry) as unknown as Module<AnyGraph>;
+    });
+    return promise;
+  }
 
   wire<
     const T extends
@@ -295,7 +348,8 @@ class InternalModule<Graph extends AnyGraph> implements Module<Graph> {
     // Single key
     if (
       typeof keyOrKeysOrMap === 'string' ||
-      typeof keyOrKeysOrMap === 'symbol'
+      typeof keyOrKeysOrMap === 'symbol' ||
+      typeof keyOrKeysOrMap === 'number'
     ) {
       return resolve(keyOrKeysOrMap, this.#registry, container, []);
     }

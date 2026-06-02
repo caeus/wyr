@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'vitest';
-import { Module } from '.';
+import { Module, toClass, toFactory, toValue } from '.';
 
+const bool$: 0 = 0 as const;
+const num$: '1' = '1' as const;
+const str$: unique symbol = Symbol('str');
+const str_bool$ = 'str_bool' as const;
+const greeter$: unique symbol = Symbol('$greeter');
+
+class Greeter {
   constructor(
     private readonly message: string,
     private readonly excited: boolean,
@@ -11,19 +18,19 @@ import { Module } from '.';
   }
 }
 
+const module0 = Module({
+  [bool$]: toValue(true),
+});
+const module1 = Module({
+  [num$]: toValue(42),
+  [str$]: toFactory([], async () => 'hola'),
+  [str_bool$]: toFactory([str$, bool$], async (s: string, b: boolean) => [
+    s,
+    b,
+  ]),
+}).override(module0);
 
-
-export const module0 = Wyr().bind(bool$).toValue(true);
-export const module1 = Wyr()
-  .bind(num$)
-  .toValue(42)
-  .bind(str$)
-  .toFunction([], async () => 'hola')
-  .bind(str_bool$)
-  .toFunction([str$, bool$], (s, b) => [s, b])
-  .merge(module0);
-
-describe('Wyr', () => {
+describe('Module', () => {
   test('wires a value binding', async () => {
     await expect(module1.wire(str_bool$)).resolves.toStrictEqual([
       'hola',
@@ -31,58 +38,57 @@ describe('Wyr', () => {
     ]);
   });
   test('wireTuple resolves ordered dependencies', async () => {
-    await expect(module1.wireTuple([str$, bool$])).resolves.toStrictEqual([
+    await expect(module1.wire([str$, bool$])).resolves.toStrictEqual([
       'hola',
       true,
     ]);
   });
   test('wireRecord resolves a named map', async () => {
     await expect(
-      module1.wireRecord({ greeting: str$, answer: num$ }),
+      module1.wire({ greeting: str$, answer: num$ }),
     ).resolves.toStrictEqual({ greeting: 'hola', answer: 42 });
   });
   test('merge prefers bindings from the newer module', async () => {
-    const base = Wyr().bind(bool$).toValue(false);
-    const override = Wyr().bind(bool$).toValue(true);
-    const merged = base.merge(override);
+    const base = Module({ [bool$]: toValue(false) });
+    const override = Module({ [bool$]: toValue(true) });
+    const merged = base.override(override);
 
     await expect(merged.wire(bool$)).resolves.toBe(true);
   });
   test('wireTuple runs dependencies in parallel', async () => {
-    const slowStr = Wyr()
-      .bind(str$)
-      .toFunction([], async () => {
+    const slowModule = Module({
+      [str$]: toFactory([], async () => {
         await new Promise((r) => setTimeout(r, 120));
         return 'hola';
-      });
-    const slowBool = slowStr.bind(bool$).toFunction([], async () => {
-      await new Promise((r) => setTimeout(r, 130));
-      return true;
+      }),
+      [bool$]: toFactory([], async () => {
+        await new Promise((r) => setTimeout(r, 130));
+        return true;
+      }),
     });
+
     const start = performance.now();
-    const result = await slowBool.wireTuple([str$, bool$]);
+    const result = await slowModule.wire([str$, bool$]);
     const elapsed = performance.now() - start;
 
     expect(result).toStrictEqual(['hola', true]);
     expect(elapsed).toBeLessThan(200); // should be ~130ms, not 250ms+
   });
   test('rejects when a dependency is absent', async () => {
-    const missingDep = Wyr()
-      .bind(str_bool$)
-      .toFunction([str$, bool$], (s, b) => [s, b]);
+    const missingDep = Module({
+      [str_bool$]: toFactory([str$, bool$], (s, b) => [s, b]),
+    });
     // had to do type assertion, to allow it to compile
     await expect(missingDep.wire(str_bool$ as never)).rejects.toThrow(
-      /No binding registered for key/i,
+      /No provider registered for key/i,
     );
   });
   test('rejects circular dependencies', async () => {
-    const cyclic = Wyr()
-      .bind(bool$)
-      .toValue(true)
-      .bind(str$)
-      .toFunction([str_bool$], async ([line]) => line)
-      .bind(str_bool$)
-      .toFunction([str$, bool$], async (line, flag) => [line, flag]);
+    const cyclic = Module({
+      [bool$]: toValue(true),
+      [str$]: toFactory([str_bool$], async ([line]) => line),
+      [str_bool$]: toFactory([str$, bool$], async (line, flag) => [line, flag]),
+    });
 
     await expect(cyclic.wire(str_bool$ as never)).rejects.toThrow(
       /circular dependency/i,
@@ -91,34 +97,31 @@ describe('Wyr', () => {
   test('bubbles up factory exceptions', async () => {
     const kaboom = new Error('kaboom');
 
-    const failing = Wyr()
-      .bind(bool$)
-      .toValue(true)
-      .bind(str$)
-      .toFunction([], async () => {
+    const failing = Module({
+      [bool$]: toValue(true),
+      [str$]: toFactory([], async () => {
         throw kaboom;
-      })
-      .bind(str_bool$)
-      .toFunction([str$, bool$], async (s, b) => [s, b]);
+      }),
+      [str_bool$]: toFactory([str$, bool$], async (s, b) => [s, b]),
+    });
 
     await expect(failing.wire(str_bool$)).rejects.toThrow(kaboom);
   });
   test('snapshot materializes keys into value bindings', async () => {
     let strInvocations = 0;
 
-    const base = Wyr()
-      .bind(bool$)
-      .toValue(true)
-      .bind(str$)
-      .toFunction([bool$], async (exlamation) => {
+    const base = Module({
+      [bool$]: toValue(true),
+      [str$]: toFactory([bool$], async (exlamation) => {
         strInvocations += 1;
         if (exlamation) {
           return 'Hola!';
         }
         return 'hi';
-      });
+      }),
+    });
 
-    const snap = await base.snapshot(str$, bool$);
+    const snap = await base.snapshot([str$, bool$]);
 
     expect(strInvocations).toBe(1);
     await expect(snap.wire(str$)).resolves.toBe('Hola!');
@@ -128,17 +131,15 @@ describe('Wyr', () => {
     expect(strInvocations).toBe(1);
 
     await expect(snap.wire(num$ as never)).rejects.toThrow(
-      /No binding registered for key/i,
+      /No provider registered for key/i,
     );
   });
-  test('bind.toClass wires class constructors', async () => {
-    const module = Wyr()
-      .bind(bool$)
-      .toValue(true)
-      .bind(str$)
-      .toFunction([], async () => 'hola')
-      .bind(greeter$)
-      .toClass([str$, bool$], Greeter);
+  test('toClass wires class constructors', async () => {
+    const module = Module({
+      [bool$]: toValue(true),
+      [str$]: toFactory([], async () => 'hola'),
+      [greeter$]: toClass([str$, bool$], Greeter),
+    });
 
     const greeter = await module.wire(greeter$);
 
