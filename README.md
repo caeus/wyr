@@ -181,8 +181,7 @@ const sameRepo = await snapshot.wire(repo);
 
 Only snapshotted keys are available on the returned module. Upstream providers used to build them are not included unless you snapshot those keys too.
 
-## Type safety and compile-time failures
-
+## Type safety
 `wyr-ts` encodes each provider's dependency input types and output type. When you wire a key, tuple, or record, TypeScript checks that:
 
 - every requested key exists in the module,
