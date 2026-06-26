@@ -182,6 +182,7 @@ const sameRepo = await snapshot.wire(repo);
 Only snapshotted keys are available on the returned module. Upstream providers used to build them are not included unless you snapshot those keys too.
 
 ## Type safety
+
 `wyr-ts` encodes each provider's dependency input types and output type. When you wire a key, tuple, or record, TypeScript checks that:
 
 - every requested key exists in the module,
@@ -189,80 +190,19 @@ Only snapshotted keys are available on the returned module. Upstream providers u
 - dependency output types satisfy the factory parameter types, and
 - dependency graphs are not circular.
 
-The examples below are intentionally invalid. If you paste them into a TypeScript project without `@ts-expect-error`, `tsc` rejects them at compile time before the code can run.
-
-### Missing requested key
+For example, this graph cannot be wired without an unsafe cast because `needsDb` depends on `database`, but the module does not provide `database`:
 
 ```ts
-const config = 'config' as const;
-const missing = 'missing' as const;
-
-const app = Module({
-  [config]: toValue({ url: 'postgres://localhost/app' }),
-});
-
-app.wire(missing);
-//        ^^^^^^^
-// TS2345: Argument of type '"missing"' is not assignable to parameter of type
-// 'Err<"missing key", { key: "missing"; trace: readonly []; }>'.
-```
-
-### Missing transitive dependency
-
-Missing keys are checked through the whole graph, not just the key you pass to `wire`. In this example, `service` exists and its direct dependency `repo` exists, but `repo` depends on the missing `database` key.
-
-```ts
-const database = 'database' as const;
-const repo = 'repo' as const;
-const service = 'service' as const;
-
-const missingTransitive = Module({
-  [repo]: toFactory([database], (db: { url: string }) => db.url),
-  [service]: toFactory([repo], (repoUrl: string) => ({ repoUrl })),
-});
-
-missingTransitive.wire(service);
-//                     ^^^^^^^
-// TS2345: Argument of type '"service"' is not assignable to parameter of type
-// 'Err<"missing key", { key: "database"; trace: readonly ["service", "repo"]; }>'.
-```
-
-The `trace` shows how TypeScript found the problem: wiring `service` requires `repo`, and wiring `repo` requires the missing `database` key.
-
-### Type mismatch
-
-```ts
-const config = 'config' as const;
 const database = Symbol('database');
+const needsDb = Symbol('needsDb');
 
-const typeMismatch = Module({
-  [config]: toValue({ url: 'postgres://localhost/app' }),
-  [database]: toFactory([config], (port: number) => port),
+const broken = Module({
+  [needsDb]: toFactory([database], (db: { query: () => unknown }) => db),
 });
 
-typeMismatch.wire(database);
-//                ^^^^^^^^
-// TS2345: Argument of type 'typeof database' is not assignable to parameter of type
-// 'Err<"type mismatch", { key: "config"; expected: number; got: { readonly url: ... } }>'.
+// Type error: the transitive dependency graph is not wireable.
+await broken.wire(needsDb);
 ```
-
-`toFactory([config], (port: number) => port)` says the `config` provider must produce a `number`, but `config` actually produces an object with a `url` field.
-
-### Circular dependency
-
-```ts
-const circular = Module({
-  a: toFactory(['b'], (value: string) => value),
-  b: toFactory(['a'], (value: string) => value),
-});
-
-circular.wire('a');
-//            ^^^
-// TS2345: Argument of type '"a"' is not assignable to parameter of type
-// 'Err<"circular dependency", { key: "a"; trace: readonly ["a", "b"]; }>'.
-```
-
-Inline string keys make the diagnostic easier to read than symbols: the error parameter names the failing key as `"a"`, and the `trace` shows the path `a -> b -> a` instead of a less helpful `unique symbol` display.
 
 Runtime guards still reject missing providers and circular dependencies if you bypass the type system with casts.
 

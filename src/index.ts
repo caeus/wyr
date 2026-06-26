@@ -228,7 +228,7 @@ type SnapshotGraph<
   [K in Keys[number] & keyof Graph]: Provider<Empty, ProviderOut<Graph[K]>>;
 };
 
-export interface Module<Graph extends AnyGraph> {
+interface Module<Graph extends AnyGraph> {
   // Single unified wire — dispatches on input shape.
   // Guard encodes the Wireable result; if Err it leaks into the input position, surfacing at the call site.
   wire<
