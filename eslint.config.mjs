@@ -39,7 +39,17 @@ export default [
     rules: {
       '@typescript-eslint/explicit-function-return-type': 'error',
       '@typescript-eslint/no-unused-vars': 'error',
+      '@typescript-eslint/no-empty-object-type': 'off',
       'prettier/prettier': 'error',
+    },
+  },
+  {
+    files: ['**/*.test.ts'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      '@typescript-eslint/no-unused-vars': 'off',
+      '@typescript-eslint/ban-types': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
     },
   },
 ];
