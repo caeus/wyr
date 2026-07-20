@@ -2,7 +2,7 @@
 
 Deterministic dependency graphs for TypeScript.
 
-`wyr-ts` is a small dependency wiring library for explicit, immutable provider graphs. You declare providers up front, compose modules with `override`, and ask a module to `wire` one key, an ordered tuple of keys, or a named record of keys. The TypeScript type system validates missing dependencies, mismatched dependency types, and circular dependency graphs at the call site.
+`wyr-ts` is a small dependency wiring library for explicit, immutable provider graphs. You declare providers up front, compose modules with `merge`, and ask a module to `wire` or `compile` all keys or a scoped subset. The TypeScript type system validates missing dependencies, mismatched dependency types, and circular dependency graphs at the call site.
 
 ## Installation
 
@@ -25,37 +25,31 @@ import { Module, toClass, toFactory, toValue } from 'wyr-ts';
 
 A module exposes:
 
-| Method                | Purpose                                                                                                    |
-| --------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `wire(key)`           | Resolves one provider key.                                                                                 |
-| `wire([keyA, keyB])`  | Resolves an ordered tuple of keys in one shared wiring pass.                                               |
-| `wire({ name: key })` | Resolves a named record of keys in one shared wiring pass.                                                 |
-| `override(module)`    | Returns a new module where the other module's providers replace providers with the same keys.              |
-| `snapshot(keys)`      | Resolves keys once and returns a new module containing those resolved values as dependency-free providers. |
+| Method              | Purpose                                                                                         |
+| ------------------- | ----------------------------------------------------------------------------------------------- |
+| `wire()`            | Returns a `LazyContainer` over all keys. Each `.get(key)` returns a `Promise`.                 |
+| `wire([keys])`      | Returns a `LazyContainer` scoped to the given keys and their transitive dependencies.           |
+| `compile()`         | Resolves all keys eagerly and returns a `Promise<EagerContainer>`. Each `.get(key)` is synchronous. |
+| `compile([keys])`   | Resolves the given keys and their transitive dependencies eagerly.                              |
+| `merge(module)`     | Returns a new module where providers from the argument replace providers with the same keys.    |
 
 ## Defining keys
 
-Provider keys can be any JavaScript `PropertyKey`: `string`, `number`, or `symbol`. A `$` suffix is not required; examples often use plain names, inline string keys, numeric keys, and symbols. Use literal keys (`as const`) or `unique symbol`s when you want TypeScript to track the graph precisely.
+Provider keys can be any JavaScript `PropertyKey`: `string`, `number`, or `symbol`. Use literal keys (`as const`) or `unique symbol`s when you want TypeScript to track the graph precisely.
 
 ```ts
-const config = 'config' as const; // string key
-const answer = 42 as const; // number key
 const database = Symbol('database'); // symbol key
-
-class DefaultMyService {}
+const answer = 42 as const;          // number key
 
 const services = Module({
-  // A named string constant key. Wire it later with services.wire(config).
-  [config]: toValue({ env: 'production' }),
+  // Inline string key — wire with services.wire(['myService'])
+  myService: toValue({ ready: true }),
 
-  // An inline string key. Wire it later with services.wire('myService').
-  myService: toClass([], DefaultMyService),
-
-  // A numeric key. Wire it later with services.wire(42).
-  [answer]: toValue('the answer'),
-
-  // A symbol key. Wire it later with services.wire(database).
+  // Symbol key — wire with services.wire([database])
   [database]: toValue({ connected: true }),
+
+  // Numeric key — wire with services.wire([answer])
+  [answer]: toValue('the answer'),
 });
 ```
 
@@ -64,61 +58,46 @@ const services = Module({
 ```ts
 import { Module, toFactory, toValue } from 'wyr-ts';
 
-const config = 'config' as const;
 const database = Symbol('database');
 const repo = Symbol('repo');
 
 const app = Module({
-  [config]: toValue({ url: 'postgres://localhost/app' }),
+  config: toValue({ url: 'postgres://localhost/app' }),
 
-  [database]: toFactory([config], async (appConfig: { url: string }) => {
-    return {
-      query: async (sql: string) => ({ sql, url: appConfig.url }),
-    };
-  }),
+  [database]: toFactory(['config'], async (cfg: { url: string }) => ({
+    query: async (sql: string) => ({ sql, url: cfg.url }),
+  })),
 
   [repo]: toFactory(
     [database],
-    (db: { query: (sql: string) => Promise<unknown> }) => {
-      return {
-        findUser: (id: string) =>
-          db.query(`select * from users where id = ${id}`),
-      };
-    },
+    (db: { query: (sql: string) => Promise<unknown> }) => ({
+      findUser: (id: string) => db.query(`select * from users where id = ${id}`),
+    }),
   ),
 });
 
-const userRepo = await app.wire(repo);
+const container = await app.compile([repo]);
+const userRepo = container.get(repo);
 await userRepo.findUser('42');
 ```
 
 `toFactory` receives dependencies as positional parameters in the same order as its key tuple. Factories may be synchronous or asynchronous.
 
-## Wiring multiple keys
+## LazyContainer vs EagerContainer
 
-Each `wire` call creates a fresh internal container. Dependencies resolved during that call share memoized promises, so shared dependencies are only constructed once per call and independent providers run in parallel.
+`wire` returns a `LazyContainer` — calling `.get(key)` triggers resolution on demand and returns a `Promise`. Dependencies resolved in the same `wire` call share memoized promises.
 
-### Tuple output
-
-```ts
-const [appConfig, userRepo] = await app.wire([config, repo]);
-```
-
-Tuple wiring preserves input order and returns a typed tuple of resolved values.
-
-### Record output
+`compile` resolves everything up front and returns an `EagerContainer` — `.get(key)` is synchronous and returns the value directly. Use `compile` when you want all values ready before proceeding.
 
 ```ts
-const wired = await app.wire({
-  config,
-  repo,
-});
+// Lazy — resolves on demand
+const lazy = app.wire(['config', repo]);
+const cfg = await lazy.get('config');
 
-wired.config.url;
-await wired.repo.findUser('42');
+// Eager — resolves everything first
+const eager = await app.compile(['config', repo]);
+const cfg2 = eager.get('config'); // synchronous
 ```
-
-Record wiring preserves your chosen output names and returns a typed object.
 
 ## Class providers
 
@@ -136,93 +115,88 @@ class Greeter {
   }
 }
 
-const excited = Symbol('excited');
-
 const greetings = Module({
   message: toValue('hello'),
-  [excited]: toValue(true),
-  greeter: toClass(['message', excited], Greeter),
+  excited: toValue(true),
+  greeter: toClass(['message', 'excited'], Greeter),
 });
 
-const greeter = await greetings.wire('greeter');
-greeter.shout(); // "hello!"
+const container = await greetings.compile(['greeter']);
+container.get('greeter').shout(); // "hello!"
 ```
 
-## Composing modules with `override`
+## Composing modules with `merge`
 
-`override` returns a new module. Providers from the module passed to `override` replace providers with matching keys from the base module.
+`merge` returns a new module. Providers from the module passed to `merge` replace providers with matching keys from the base module.
 
 ```ts
-const feature = Module({
-  [config]: toValue({ url: 'postgres://localhost/app' }),
+const app = Module({
+  config: toValue({ url: 'postgres://localhost/app' }),
 });
 
 const testOverrides = Module({
-  [config]: toValue({ url: 'postgres://localhost/test' }),
+  config: toValue({ url: 'postgres://localhost/test' }),
 });
 
-const testFeature = feature.override(testOverrides);
-const testConfig = await testFeature.wire(config);
-// testConfig.url === 'postgres://localhost/test'
+const testApp = app.merge(testOverrides);
+const container = await testApp.compile(['config']);
+container.get('config').url; // 'postgres://localhost/test'
 ```
 
 The original modules are not mutated.
 
-## Snapshotting resolved values
-
-`snapshot(keys)` resolves the requested keys once using a shared wiring pass, then returns a new module that contains only those keys as `toValue` providers. This is useful when you want to freeze expensive setup or carry a subset of already-resolved bindings forward.
-
-```ts
-const snapshot = await app.snapshot([config, repo]);
-
-const sameConfig = await snapshot.wire(config);
-const sameRepo = await snapshot.wire(repo);
-```
-
-Only snapshotted keys are available on the returned module. Upstream providers used to build them are not included unless you snapshot those keys too.
-
 ## Type safety
 
-`wyr-ts` encodes each provider's dependency input types and output type. When you wire a key, tuple, or record, TypeScript checks that:
+`wyr-ts` encodes each provider's dependency input types and output type. Calling `wire()` or `compile()` is a compile error unless the full graph is valid. Calling `wire([keys])` or `compile([keys])` is a compile error unless the transitive subgraph for those keys is valid.
+
+TypeScript checks that:
 
 - every requested key exists in the module,
 - every transitive dependency key exists,
 - dependency output types satisfy the factory parameter types, and
 - dependency graphs are not circular.
 
-For example, this graph cannot be wired without an unsafe cast because `needsDb` depends on `database`, but the module does not provide `database`:
-
 ```ts
-const database = Symbol('database');
-const needsDb = Symbol('needsDb');
-
 const broken = Module({
-  [needsDb]: toFactory([database], (db: { query: () => unknown }) => db),
+  greeting: toFactory(['name'], (s: string) => s),
+  // 'name' is never provided
 });
 
-// Type error: the transitive dependency graph is not wireable.
-await broken.wire(needsDb);
+// Type error: 'name' is missing from the module.
+broken.wire();
+broken.compile();
+
+// But unrelated valid keys are still accessible:
+const partial = Module({
+  count: toValue(42),
+  greeting: toFactory(['name'], (s: string) => s),
+});
+
+partial.wire(['count']);    // ok — 'count' has no deps
+partial.compile(['count']); // ok
+
+// @ts-expect-error — 'name' is transitively missing
+partial.wire(['greeting']);
 ```
+
+The `_graphErr` phantom field on a module surfaces the full error map for invalid graphs — hover over a module variable in your IDE to inspect wiring problems per key.
 
 Runtime guards still reject missing providers and circular dependencies if you bypass the type system with casts.
 
 ## Runtime behavior
 
 - A module is immutable after creation.
-- Every `wire` call uses a fresh memoization container.
-- Within a single `wire` or `snapshot` call, shared dependencies are resolved once.
+- Every `wire` or `compile` call uses a fresh resolution container.
+- Within a single call, shared dependencies are resolved once (memoized promises).
 - Independent dependencies are resolved concurrently with `Promise.all`.
-- Factory errors are not swallowed; they reject the `wire` or `snapshot` promise.
+- Factory errors are not swallowed; they reject the `compile` promise or the individual `.get()` promise on a `LazyContainer`.
 
 ## Development
 
-This repository uses `make` targets:
-
 ```bash
-make test    # run Vitest
-make lint    # run ESLint
-make build   # lint, test, then compile declarations and JavaScript
-make docs    # generate TypeDoc documentation
+npx vitest run   # run tests
+npx eslint src   # lint
+npx tsc --noEmit # type-check
 ```
 
 ## License

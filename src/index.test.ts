@@ -10,11 +10,9 @@ const typeTest = (s: string, _: () => void): void =>
     expectTypeOf(_).toBeFunction();
   });
 
-const bool$: 0 = 0 as const;
-const num$: '1' = '1' as const;
-const str$: unique symbol = Symbol('str');
-const str_bool$ = 'str_bool' as const;
-const greeter$: unique symbol = Symbol('$greeter');
+// Unique symbol and numeric keys — used to verify non-string key support
+const symKey: unique symbol = Symbol('symKey');
+const numKey: 0 = 0 as const;
 
 class Greeter {
   constructor(
@@ -27,93 +25,86 @@ class Greeter {
   }
 }
 
-const module0 = Module({
-  [bool$]: toValue(true),
+const baseModule = Module({
+  [symKey]: toFactory([], async () => 'hola'),
+  [numKey]: toValue(true),
 });
-const module1 = Module({
-  [num$]: toValue(42),
-  [str$]: toFactory([], async () => 'hola'),
-  [str_bool$]: toFactory([str$, bool$], async (s: string, b: boolean) => [
+const appModule = Module({
+  count: toValue(42),
+  greeting: toFactory([symKey, numKey], async (s: string, b: boolean) => [
     s,
     b,
   ]),
-}).merge(module0);
+}).merge(baseModule);
 
 describe('Module', () => {
   describe('wire (LazyContainer)', () => {
     test('no keys — covers all keys, .get returns promise of correct value', async () => {
-      const container = module1.wire();
-      await expect(container.get(str$)).resolves.toBe('hola');
-      await expect(container.get(bool$)).resolves.toBe(true);
-      await expect(container.get(num$)).resolves.toBe(42);
+      const container = appModule.wire();
+      await expect(container.get(symKey)).resolves.toBe('hola');
+      await expect(container.get(numKey)).resolves.toBe(true);
+      await expect(container.get('count')).resolves.toBe(42);
     });
 
     test('scoped keys — container includes targets and transitives', async () => {
-      const container = module1.wire([str_bool$]);
-      await expect(container.get(str_bool$)).resolves.toStrictEqual([
+      const container = appModule.wire(['greeting']);
+      await expect(container.get('greeting')).resolves.toStrictEqual([
         'hola',
         true,
       ]);
-      // transitives are accessible too
-      await expect(container.get(str$)).resolves.toBe('hola');
-      await expect(container.get(bool$)).resolves.toBe(true);
+      await expect(container.get(symKey)).resolves.toBe('hola');
+      await expect(container.get(numKey)).resolves.toBe(true);
     });
 
     test('memoises — factory invoked only once across multiple .get calls', async () => {
       let invocations = 0;
       const m = Module({
-        [str$]: toFactory([], async () => {
+        greeting: toFactory([], async () => {
           invocations += 1;
           return 'hola';
         }),
       });
       const container = m.wire();
-      await container.get(str$);
-      await container.get(str$);
+      await container.get('greeting');
+      await container.get('greeting');
       expect(invocations).toBe(1);
     });
 
     test('rejects when a dependency is absent', async () => {
       const missingDep = Module({
-        [str_bool$]: toFactory([str$, bool$], (s, b) => [s, b]),
+        greeting: toFactory(['name', 'excited'], (s, b) => [s, b]),
       });
-      // compile surfaces the error since it awaits resolution
       await expect(
-        (missingDep as never as typeof module1).compile([str_bool$]),
+        (missingDep as never as typeof appModule).compile(['greeting']),
       ).rejects.toThrow(/No provider registered for key/i);
     });
 
     test('rejects circular dependencies', async () => {
       const cyclic = Module({
-        [bool$]: toValue(true),
-        [str$]: toFactory([str_bool$], async ([line]) => line),
-        [str_bool$]: toFactory([str$, bool$], async (line, flag) => [
-          line,
-          flag,
-        ]),
+        a: toFactory(['b'], async (x: string) => x),
+        b: toFactory(['a'], async (x: string) => x),
       });
-      await expect(
-        (cyclic as never as typeof module1).compile([str_bool$]),
-      ).rejects.toThrow(/circular dependency/i);
+      await expect((cyclic as any).compile(['a'])).rejects.toThrow(
+        /circular dependency/i,
+      );
     });
 
     test('bubbles up factory exceptions', async () => {
       const kaboom = new Error('kaboom');
       const failing = Module({
-        [bool$]: toValue(true),
-        [str$]: toFactory([], async () => {
+        name: toFactory([], async () => {
           throw kaboom;
         }),
-        [str_bool$]: toFactory([str$, bool$], async (s, b) => [s, b]),
+        greeting: toFactory(['name'], async (s: string) => s),
       });
-      await expect(failing.compile([str_bool$])).rejects.toThrow(kaboom);
+      await expect(failing.compile(['greeting'])).rejects.toThrow(kaboom);
     });
   });
 
   describe('LazyContainer', () => {
     test('get throws for a key not in the container', () => {
-      const container = module1.wire([str_bool$]);
-      expect(() => container.get(num$ as never)).toThrow(
+      const container = appModule.wire(['greeting']);
+      expect(() => container.get('count' as never)).toThrow(
         /Key not in container/i,
       );
     });
@@ -121,26 +112,26 @@ describe('Module', () => {
 
   describe('compile (EagerContainer)', () => {
     test('no keys — covers all keys, .get is synchronous', async () => {
-      const container = await module1.compile();
-      expect(container.get(str$)).toBe('hola');
-      expect(container.get(bool$)).toBe(true);
-      expect(container.get(num$)).toBe(42);
+      const container = await appModule.compile();
+      expect(container.get(symKey)).toBe('hola');
+      expect(container.get(numKey)).toBe(true);
+      expect(container.get('count')).toBe(42);
     });
 
     test('scoped keys — container includes targets and transitives', async () => {
-      const container = await module1.compile([str_bool$]);
-      expect(container.get(str_bool$)).toStrictEqual(['hola', true]);
-      expect(container.get(str$)).toBe('hola');
-      expect(container.get(bool$)).toBe(true);
+      const container = await appModule.compile(['greeting']);
+      expect(container.get('greeting')).toStrictEqual(['hola', true]);
+      expect(container.get(symKey)).toBe('hola');
+      expect(container.get(numKey)).toBe(true);
     });
 
     test('resolves dependencies in parallel', async () => {
       const slowModule = Module({
-        [str$]: toFactory([], async () => {
+        name: toFactory([], async () => {
           await new Promise((r) => setTimeout(r, 120));
           return 'hola';
         }),
-        [bool$]: toFactory([], async () => {
+        excited: toFactory([], async () => {
           await new Promise((r) => setTimeout(r, 130));
           return true;
         }),
@@ -150,45 +141,45 @@ describe('Module', () => {
       const container = await slowModule.compile();
       const elapsed = performance.now() - start;
 
-      expect(container.get(str$)).toBe('hola');
-      expect(container.get(bool$)).toBe(true);
+      expect(container.get('name')).toBe('hola');
+      expect(container.get('excited')).toBe(true);
       expect(elapsed).toBeLessThan(200);
     });
 
     test('get throws for a key not in the container', async () => {
-      const container = await module1.compile([str_bool$]);
-      expect(() => container.get(num$ as never)).toThrow(
+      const container = await appModule.compile(['greeting']);
+      expect(() => container.get('count' as never)).toThrow(
         /Key not in container/i,
       );
     });
 
     test('get returns value synchronously, not a Promise', async () => {
-      const container = await module1.compile();
-      const value = container.get(str$);
+      const container = await appModule.compile();
+      const value = container.get('count');
       expect(value).not.toBeInstanceOf(Promise);
-      expect(value).toBe('hola');
+      expect(value).toBe(42);
     });
   });
 
   describe('merge', () => {
     test('prefers bindings from the argument module', async () => {
-      const base = Module({ [bool$]: toValue(false) });
-      const patch = Module({ [bool$]: toValue(true) });
+      const base = Module({ flag: toValue(false) });
+      const patch = Module({ flag: toValue(true) });
       const merged = base.merge(patch);
-      const container = await merged.compile([bool$]);
-      expect(container.get(bool$)).toBe(true);
+      const container = await merged.compile(['flag']);
+      expect(container.get('flag')).toBe(true);
     });
   });
 
   describe('toClass', () => {
     test('wires class constructors', async () => {
       const m = Module({
-        [bool$]: toValue(true),
-        [str$]: toFactory([], async () => 'hola'),
-        [greeter$]: toClass([str$, bool$], Greeter),
+        message: toFactory([], async () => 'hola'),
+        excited: toValue(true),
+        greeter: toClass(['message', 'excited'], Greeter),
       });
-      const container = await m.compile([greeter$]);
-      const greeter = container.get(greeter$);
+      const container = await m.compile(['greeter']);
+      const greeter = container.get('greeter');
       expect(greeter).toBeInstanceOf(Greeter);
       expect(greeter.shout()).toBe('hola!');
     });
@@ -196,27 +187,27 @@ describe('Module', () => {
 
   describe('types', () => {
     typeTest('valid module has empty error type', () => {
-      expectTypeOf(errOf(module1)).toEqualTypeOf<{}>();
+      expectTypeOf(errOf(appModule)).toEqualTypeOf<{}>();
     });
 
     typeTest(
       'missing deps: error type lists affected keys with missing key errors',
       () => {
         const broken = Module({
-          [str_bool$]: toFactory([str$, bool$], (s: string, b: boolean) => [
+          greeting: toFactory([symKey, numKey], (s: string, b: boolean) => [
             s,
             b,
           ]),
         });
         expectTypeOf(errOf(broken)).toEqualTypeOf<{
-          readonly str_bool:
+          readonly greeting:
             | {
                 message: 'missing key';
-                ctx: { key: typeof bool$; trace: readonly ['str_bool'] };
+                ctx: { key: typeof numKey; trace: readonly ['greeting'] };
               }
             | {
                 message: 'missing key';
-                ctx: { key: typeof str$; trace: readonly ['str_bool'] };
+                ctx: { key: typeof symKey; trace: readonly ['greeting'] };
               };
         }>();
       },
@@ -226,21 +217,21 @@ describe('Module', () => {
       'type mismatch: error type lists affected keys with type mismatch errors',
       () => {
         const mismatched = Module({
-          [bool$]: toValue('not a boolean' as string),
-          [str$]: toFactory([], async () => 'hola'),
-          [str_bool$]: toFactory(
-            [str$, bool$],
+          excited: toValue('not a boolean' as string),
+          name: toFactory([], async () => 'hola'),
+          greeting: toFactory(
+            ['name', 'excited'],
             async (s: string, b: boolean) => [s, b],
           ),
         });
         expectTypeOf(errOf(mismatched)).toEqualTypeOf<{
-          readonly str_bool: {
+          readonly greeting: {
             message: 'type mismatch';
             ctx: {
-              key: 0;
+              key: 'excited';
               expected: boolean;
               got: string;
-              trace: readonly ['str_bool'];
+              trace: readonly ['greeting'];
             };
           };
         }>();
@@ -251,20 +242,16 @@ describe('Module', () => {
       'circular dep: error type lists affected keys with circular dependency errors',
       () => {
         const cyclic = Module({
-          [bool$]: toValue(true),
-          [str$]: toFactory([str_bool$], async (x: string) => x),
-          [str_bool$]: toFactory(
-            [str$, bool$],
-            async (s: string, b: boolean) => [s, b],
-          ),
+          a: toFactory(['b'], async (x: string) => x),
+          b: toFactory(['a'], async (x: string) => x),
         });
         const err = errOf(cyclic);
-        expectTypeOf(err.str_bool).toMatchTypeOf<{
+        expectTypeOf(err.a).toMatchTypeOf<{
           message: 'circular dependency';
           ctx: object;
         }>();
-        expectTypeOf(err[str$]).toMatchTypeOf<{
-          message: 'type mismatch';
+        expectTypeOf(err.b).toMatchTypeOf<{
+          message: 'circular dependency';
           ctx: object;
         }>();
       },
@@ -274,14 +261,14 @@ describe('Module', () => {
       'wire() and compile() on a module with missing deps are compile errors',
       () => {
         const broken = Module({
-          [str_bool$]: toFactory([str$, bool$], (s: string, b: boolean) => [
+          greeting: toFactory([symKey, numKey], (s: string, b: boolean) => [
             s,
             b,
           ]),
         });
-        // @ts-expect-error — str$ and bool$ are missing from the module
+        // @ts-expect-error — symKey and numKey are missing from the module
         broken.wire();
-        // @ts-expect-error — str$ and bool$ are missing from the module
+        // @ts-expect-error — symKey and numKey are missing from the module
         broken.compile();
       },
     );
@@ -290,20 +277,20 @@ describe('Module', () => {
       'wire(keys) and compile(keys) are compile errors only for keys with wiring errors',
       () => {
         const partiallyBroken = Module({
-          [num$]: toValue(42),
-          [str_bool$]: toFactory([str$, bool$], (s: string, b: boolean) => [
+          count: toValue(42),
+          greeting: toFactory([symKey, numKey], (s: string, b: boolean) => [
             s,
             b,
           ]),
         });
-        // num$ has no deps — valid scope, no error
-        partiallyBroken.wire([num$]);
-        partiallyBroken.compile([num$]);
-        // str_bool$ has missing transitive deps — blocked
-        // @ts-expect-error — str$ and bool$ are transitively missing
-        partiallyBroken.wire([str_bool$]);
-        // @ts-expect-error — str$ and bool$ are transitively missing
-        partiallyBroken.compile([str_bool$]);
+        // count has no deps — valid scope, no error
+        partiallyBroken.wire(['count']);
+        partiallyBroken.compile(['count']);
+        // greeting has missing transitive deps — blocked
+        // @ts-expect-error — symKey and numKey are transitively missing
+        partiallyBroken.wire(['greeting']);
+        // @ts-expect-error — symKey and numKey are transitively missing
+        partiallyBroken.compile(['greeting']);
       },
     );
   });
