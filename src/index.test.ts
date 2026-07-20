@@ -2,8 +2,13 @@ import { describe, expect, test } from 'vitest';
 import { AnyGraph, GraphErr, Module, toClass, toFactory, toValue } from '.';
 
 declare function errOf<Graph extends AnyGraph>(
-  module: Module<Graph, object>,
+  module: Module<Graph>,
 ): GraphErr<Graph>;
+
+const typeTest = (s: string, _: () => void): void =>
+  test(s, () => {
+    expectTypeOf(_).toBeFunction();
+  });
 
 const bool$: 0 = 0 as const;
 const num$: '1' = '1' as const;
@@ -190,21 +195,19 @@ describe('Module', () => {
   });
 
   describe('types', () => {
-    test('valid module has empty error type', () => {
-      const assertTypes = () => {
-        expectTypeOf(errOf(module1)).toEqualTypeOf<{}>();
-      };
-      expectTypeOf(assertTypes).toBeFunction();
+    typeTest('valid module has empty error type', () => {
+      expectTypeOf(errOf(module1)).toEqualTypeOf<{}>();
     });
 
-    test('missing deps: error type lists affected keys with missing key errors', () => {
-      const broken = Module({
-        [str_bool$]: toFactory([str$, bool$], (s: string, b: boolean) => [
-          s,
-          b,
-        ]),
-      });
-      const assertTypes = () => {
+    typeTest(
+      'missing deps: error type lists affected keys with missing key errors',
+      () => {
+        const broken = Module({
+          [str_bool$]: toFactory([str$, bool$], (s: string, b: boolean) => [
+            s,
+            b,
+          ]),
+        });
         expectTypeOf(errOf(broken)).toEqualTypeOf<{
           readonly str_bool:
             | {
@@ -216,20 +219,20 @@ describe('Module', () => {
                 ctx: { key: typeof str$; trace: readonly ['str_bool'] };
               };
         }>();
-      };
-      expectTypeOf(assertTypes).toBeFunction();
-    });
+      },
+    );
 
-    test('type mismatch: error type lists affected keys with type mismatch errors', () => {
-      const mismatched = Module({
-        [bool$]: toValue('not a boolean' as string),
-        [str$]: toFactory([], async () => 'hola'),
-        [str_bool$]: toFactory([str$, bool$], async (s: string, b: boolean) => [
-          s,
-          b,
-        ]),
-      });
-      const assertTypes = () => {
+    typeTest(
+      'type mismatch: error type lists affected keys with type mismatch errors',
+      () => {
+        const mismatched = Module({
+          [bool$]: toValue('not a boolean' as string),
+          [str$]: toFactory([], async () => 'hola'),
+          [str_bool$]: toFactory(
+            [str$, bool$],
+            async (s: string, b: boolean) => [s, b],
+          ),
+        });
         expectTypeOf(errOf(mismatched)).toEqualTypeOf<{
           readonly str_bool: {
             message: 'type mismatch';
@@ -241,20 +244,20 @@ describe('Module', () => {
             };
           };
         }>();
-      };
-      expectTypeOf(assertTypes).toBeFunction();
-    });
+      },
+    );
 
-    test('circular dep: error type lists affected keys with circular dependency errors', () => {
-      const cyclic = Module({
-        [bool$]: toValue(true),
-        [str$]: toFactory([str_bool$], async (x: string) => x),
-        [str_bool$]: toFactory([str$, bool$], async (s: string, b: boolean) => [
-          s,
-          b,
-        ]),
-      });
-      const assertTypes = () => {
+    typeTest(
+      'circular dep: error type lists affected keys with circular dependency errors',
+      () => {
+        const cyclic = Module({
+          [bool$]: toValue(true),
+          [str$]: toFactory([str_bool$], async (x: string) => x),
+          [str_bool$]: toFactory(
+            [str$, bool$],
+            async (s: string, b: boolean) => [s, b],
+          ),
+        });
         const err = errOf(cyclic);
         expectTypeOf(err.str_bool).toMatchTypeOf<{
           message: 'circular dependency';
@@ -264,25 +267,23 @@ describe('Module', () => {
           message: 'type mismatch';
           ctx: object;
         }>();
-      };
-      expectTypeOf(assertTypes).toBeFunction();
-    });
+      },
+    );
 
-    // Type-only: never executed, just checked by tsc via @ts-expect-error.
-    test('wire() and compile() on a module with missing deps are compile errors', () => {
-      const broken = Module({
-        [str_bool$]: toFactory([str$, bool$], (s: string, b: boolean) => [
-          s,
-          b,
-        ]),
-      });
-      const assertErrors = () => {
+    typeTest(
+      'wire() and compile() on a module with missing deps are compile errors',
+      () => {
+        const broken = Module({
+          [str_bool$]: toFactory([str$, bool$], (s: string, b: boolean) => [
+            s,
+            b,
+          ]),
+        });
         // @ts-expect-error — str$ and bool$ are missing from the module
         broken.wire();
         // @ts-expect-error — str$ and bool$ are missing from the module
         broken.compile();
-      };
-      expectTypeOf(assertErrors).toBeFunction();
-    });
+      },
+    );
   });
 });

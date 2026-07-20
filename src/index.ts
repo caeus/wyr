@@ -190,25 +190,29 @@ export interface LazyContainer<M extends {}> {
 
 // ─── Module ───────────────────────────────────────────────────────────────────
 
-export interface Module<Graph extends AnyGraph, out Err extends {}> {
-  readonly _err: Err;
+export interface WiringWitness<T> {
+  detect: (e: T) => void;
+}
+
+export interface Module<Graph extends AnyGraph>
+  extends WiringWitness<GraphErr<Graph>> {
   merge<NewGraph extends AnyGraph>(
-    module: Module<NewGraph, {}>,
-  ): Module<MergeGraphs<Graph, NewGraph>, {}>;
+    module: Module<NewGraph>,
+  ): Module<MergeGraphs<Graph, NewGraph>>;
 
   wire(
-    this: Module<Graph, GraphErr<Graph>>,
+    this: Module<Graph> & WiringWitness<{}>,
   ): LazyContainer<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>;
   wire<const Keys extends readonly (keyof Graph)[]>(
-    this: Module<Graph, ScopedGraphErr<Graph, Keys>>,
+    this: Module<Graph> & WiringWitness<ScopedGraphErr<Graph, Keys>>,
     keys: Keys,
   ): LazyContainer<KTM<Graph, Keys>>;
 
   compile(
-    this: Module<Graph, GraphErr<Graph>>,
+    this: Module<Graph> & WiringWitness<{}>,
   ): Promise<EagerContainer<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>>;
   compile<const Keys extends readonly (keyof Graph)[]>(
-    this: Module<Graph, ScopedGraphErr<Graph, Keys>>,
+    this: Module<Graph> & WiringWitness<ScopedGraphErr<Graph, Keys>>,
     keys: Keys,
   ): Promise<EagerContainer<KTM<Graph, Keys>>>;
 }
@@ -280,8 +284,7 @@ class InternalEagerContainer<M extends Record<PropertyKey, unknown>>
   }
 }
 
-class InternalModule<Graph extends AnyGraph> implements Module<Graph, {}> {
-  declare readonly _err: {};
+class InternalModule<Graph extends AnyGraph> implements Module<Graph> {
   readonly #registry: URegistry;
 
   constructor(registry: URegistry) {
@@ -289,15 +292,14 @@ class InternalModule<Graph extends AnyGraph> implements Module<Graph, {}> {
   }
 
   merge<NewGraph extends AnyGraph>(
-    module: Module<NewGraph, {}>,
-  ): Module<MergeGraphs<Graph, NewGraph>, {}> {
+    module: Module<NewGraph>,
+  ): Module<MergeGraphs<Graph, NewGraph>> {
     const newRegistry = {
       ...this.#registry,
       ...(module as InternalModule<NewGraph>).#registry,
     };
     return new InternalModule(newRegistry) as unknown as Module<
-      MergeGraphs<Graph, NewGraph>,
-      {}
+      MergeGraphs<Graph, NewGraph>
     >;
   }
 
@@ -349,10 +351,11 @@ class InternalModule<Graph extends AnyGraph> implements Module<Graph, {}> {
     );
     return new InternalEagerContainer(Object.fromEntries(entries));
   }
+  detect(): void {}
 }
 
 export const Module = <
   const Providers extends Record<PropertyKey, AnyProvider>,
 >(
   providers: Providers,
-): Module<ProvidersToGraph<Providers>, {}> => new InternalModule(providers);
+): Module<ProvidersToGraph<Providers>> => new InternalModule(providers);
