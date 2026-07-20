@@ -190,31 +190,38 @@ export interface LazyContainer<M extends {}> {
 
 // ─── Module ───────────────────────────────────────────────────────────────────
 
-export interface WiringWitness<T> {
-  detect: (e: T) => void;
-}
-
-export interface Module<Graph extends AnyGraph>
-  extends WiringWitness<GraphErr<Graph>> {
+export interface Module<Graph extends AnyGraph> {
+  readonly validity?: {};
   merge<NewGraph extends AnyGraph>(
     module: Module<NewGraph>,
   ): Module<MergeGraphs<Graph, NewGraph>>;
 
   wire(
-    this: Module<Graph> & WiringWitness<{}>,
+    this: ValidModule<Graph>,
   ): LazyContainer<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>;
   wire<const Keys extends readonly (keyof Graph)[]>(
-    this: Module<Graph> & WiringWitness<ScopedGraphErr<Graph, Keys>>,
+    this: ScopedValidModule<Graph, Keys>,
     keys: Keys,
   ): LazyContainer<KTM<Graph, Keys>>;
 
   compile(
-    this: Module<Graph> & WiringWitness<{}>,
+    this: ValidModule<Graph>,
   ): Promise<EagerContainer<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>>;
   compile<const Keys extends readonly (keyof Graph)[]>(
-    this: Module<Graph> & WiringWitness<ScopedGraphErr<Graph, Keys>>,
+    this: ScopedValidModule<Graph, Keys>,
     keys: Keys,
   ): Promise<EagerContainer<KTM<Graph, Keys>>>;
+}
+
+interface ValidModule<Graph extends AnyGraph> extends Module<Graph> {
+  readonly validity?: GraphErr<Graph>;
+}
+
+interface ScopedValidModule<
+  Graph extends AnyGraph,
+  Keys extends readonly (keyof Graph)[],
+> extends Module<Graph> {
+  readonly validity?: ScopedGraphErr<Graph, Keys>;
 }
 
 type URegistry = Record<PropertyKey, AnyProvider>;
@@ -285,6 +292,7 @@ class InternalEagerContainer<M extends Record<PropertyKey, unknown>>
 }
 
 class InternalModule<Graph extends AnyGraph> implements Module<Graph> {
+  declare readonly validity?: {};
   readonly #registry: URegistry;
 
   constructor(registry: URegistry) {
@@ -351,7 +359,6 @@ class InternalModule<Graph extends AnyGraph> implements Module<Graph> {
     );
     return new InternalEagerContainer(Object.fromEntries(entries));
   }
-  detect(): void {}
 }
 
 export const Module = <

@@ -285,5 +285,26 @@ describe('Module', () => {
         broken.compile();
       },
     );
+
+    typeTest(
+      'wire(keys) and compile(keys) are compile errors only for keys with wiring errors',
+      () => {
+        const partiallyBroken = Module({
+          [num$]: toValue(42),
+          [str_bool$]: toFactory([str$, bool$], (s: string, b: boolean) => [
+            s,
+            b,
+          ]),
+        });
+        // num$ has no deps — valid scope, no error
+        partiallyBroken.wire([num$]);
+        partiallyBroken.compile([num$]);
+        // str_bool$ has missing transitive deps — blocked
+        // @ts-expect-error — str$ and bool$ are transitively missing
+        partiallyBroken.wire([str_bool$]);
+        // @ts-expect-error — str$ and bool$ are transitively missing
+        partiallyBroken.compile([str_bool$]);
+      },
+    );
   });
 });
