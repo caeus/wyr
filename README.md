@@ -22,6 +22,8 @@ import { Module, toClass, toFactory, toValue } from 'wyr-ts';
 | `toValue(value)`      | Registers a dependency-free constant or promise-backed value.                      |
 | `toFactory(keys, fn)` | Registers a factory whose positional arguments are resolved from `keys`.           |
 | `toClass(keys, ctor)` | Registers a class constructor whose positional arguments are resolved from `keys`. |
+| `GraphErr<Graph>`     | Type-level error map: keys with wiring problems mapped to their error details.     |
+| `AnyGraph`            | Base constraint for a record of providers; useful for generic utilities.           |
 
 A module exposes:
 
@@ -179,7 +181,7 @@ partial.compile(['count']); // ok
 partial.wire(['greeting']);
 ```
 
-The `_graphErr` phantom field on a module surfaces the full error map for invalid graphs — hover over a module variable in your IDE to inspect wiring problems per key.
+The `validity?` phantom field on a module is typed as `GraphErr<Graph>`, which surfaces the full error map for invalid graphs — hover over a module variable in your IDE to inspect wiring problems per key.
 
 Runtime guards still reject missing providers and circular dependencies if you bypass the type system with casts.
 
