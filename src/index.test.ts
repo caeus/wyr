@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'vitest';
-import { AnyGraph, GraphErr, Module, toClass, toFactory, toValue } from '.';
+import {
+  AnyGraph,
+  GraphErr,
+  Module,
+  ShakenGraph,
+  TransitiveKeys,
+  toClass,
+  toFactory,
+  toValue,
+} from '.';
 
 declare function errOf<Graph extends AnyGraph>(
   module: Module<Graph>,
@@ -252,6 +261,48 @@ describe('Module', () => {
         });
         // @ts-expect-error — symKey and numKey are missing from the module
         broken.compile();
+      },
+    );
+
+    typeTest(
+      'TransitiveKeys includes the key itself and all transitive deps',
+      () => {
+        // appModule graph: greeting -> [symKey, numKey], symKey -> [], numKey -> [], count -> []
+        type Graph = typeof appModule extends Module<infer G> ? G : never;
+        expectTypeOf<TransitiveKeys<Graph, 'greeting'>>().toEqualTypeOf<
+          'greeting' | typeof symKey | typeof numKey | 0
+        >();
+        // count has no deps — only itself
+        expectTypeOf<TransitiveKeys<Graph, 'count'>>().toEqualTypeOf<'count'>();
+      },
+    );
+
+    typeTest(
+      'TransitiveKeys distributes over a union — dep-free keys must not drop transitive deps of other keys',
+      () => {
+        // 'count' has no deps; 'greeting' depends on symKey and numKey.
+        // With the bug, ProviderIn<Graph['greeting'] | Graph['count']> collapses to {}
+        // via keyof ({symKey,numKey} | {}) = never, losing all transitive deps.
+        type Graph = typeof appModule extends Module<infer G> ? G : never;
+        expectTypeOf<
+          TransitiveKeys<Graph, 'greeting' | 'count'>
+        >().toEqualTypeOf<
+          'greeting' | 'count' | typeof symKey | typeof numKey | 0
+        >();
+      },
+    );
+
+    typeTest(
+      'ShakenGraph contains only the transitive closure of the given keys',
+      () => {
+        type Graph = typeof appModule extends Module<infer G> ? G : never;
+        expectTypeOf<keyof ShakenGraph<Graph, ['greeting']>>().toEqualTypeOf<
+          'greeting' | typeof symKey | typeof numKey
+        >();
+        // count is NOT in the closure of greeting
+        expectTypeOf<
+          'count' extends keyof ShakenGraph<Graph, ['greeting']> ? true : false
+        >().toEqualTypeOf<false>();
       },
     );
 

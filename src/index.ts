@@ -161,15 +161,20 @@ export type GraphErr<Graph extends AnyGraph> = Simplify<{
 
 // ─── TransitiveKeys / ShakenGraph ────────────────────────────────────────────
 
-type TransitiveKeys<Graph extends AnyGraph, K extends keyof Graph> =
-  | K
-  | (keyof ProviderIn<Graph[K]> extends infer D
-      ? D extends keyof Graph
-        ? TransitiveKeys<Graph, D>
-        : never
-      : never);
+export type TransitiveKeys<
+  Graph extends AnyGraph,
+  K extends keyof Graph,
+> = K extends keyof Graph
+  ?
+      | K
+      | (keyof ProviderIn<Graph[K]> extends infer D
+          ? D extends keyof Graph
+            ? TransitiveKeys<Graph, D>
+            : never
+          : never)
+  : never;
 
-type ShakenGraph<
+export type ShakenGraph<
   Graph extends AnyGraph,
   Keys extends readonly (keyof Graph)[],
 > = { [K in TransitiveKeys<Graph, Keys[number]>]: Graph[K] };
