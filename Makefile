@@ -1,6 +1,6 @@
-.PHONY: test build lint format docs release
+.PHONY: test compile build lint format docs publish
 
-build: lint test
+compile: lint test
 	npx tsc -p tsconfig.build.json
 
 test:
@@ -16,5 +16,8 @@ format:
 docs:
 	npx typedoc
 
-release: build docs
-	@echo "All checks passed. Ready for release."
+build: compile docs
+	@echo "All checks passed. Ready to publish."
+
+publish: build
+	npm publish
