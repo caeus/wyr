@@ -2,7 +2,7 @@
 
 Deterministic dependency graphs for TypeScript.
 
-`wyr-ts` is a small dependency wiring library for explicit, immutable provider graphs. You declare providers up front, compose modules with `merge`, and ask a module to `wire` or `compile` all keys or a scoped subset. The TypeScript type system validates missing dependencies, mismatched dependency types, and circular dependency graphs at the call site.
+`wyr-ts` is a small dependency wiring library for explicit, immutable provider graphs. You declare providers up front, compose modules with `merge`, tree-shake with `shake`, and resolve everything with `compile`. The TypeScript type system validates missing dependencies, mismatched dependency types, and circular dependency graphs at the call site.
 
 ## Installation
 
@@ -27,13 +27,11 @@ import { Module, toClass, toFactory, toValue } from 'wyr-ts';
 
 A module exposes:
 
-| Method              | Purpose                                                                                         |
-| ------------------- | ----------------------------------------------------------------------------------------------- |
-| `wire()`            | Returns a `LazyContainer` over all keys. Each `.get(key)` returns a `Promise`.                 |
-| `wire([keys])`      | Returns a `LazyContainer` scoped to the given keys and their transitive dependencies.           |
-| `compile()`         | Resolves all keys eagerly and returns a `Promise<EagerContainer>`. Each `.get(key)` is synchronous. |
-| `compile([keys])`   | Resolves the given keys and their transitive dependencies eagerly.                              |
-| `merge(module)`     | Returns a new module where providers from the argument replace providers with the same keys.    |
+| Method          | Purpose                                                                                      |
+| --------------- | -------------------------------------------------------------------------------------------- |
+| `shake(keys)`   | Returns a new module scoped to the given keys and their transitive dependencies.             |
+| `compile()`     | Resolves all keys eagerly and returns a `Promise<Container>`. Each `.get(key)` is synchronous. |
+| `merge(module)` | Returns a new module where providers from the argument replace providers with the same keys. |
 
 ## Defining keys
 
@@ -44,13 +42,13 @@ const database = Symbol('database'); // symbol key
 const answer = 42 as const;          // number key
 
 const services = Module({
-  // Inline string key — wire with services.wire(['myService'])
+  // Inline string key
   myService: toValue({ ready: true }),
 
-  // Symbol key — wire with services.wire([database])
+  // Symbol key
   [database]: toValue({ connected: true }),
 
-  // Numeric key — wire with services.wire([answer])
+  // Numeric key
   [answer]: toValue('the answer'),
 });
 ```
@@ -78,28 +76,24 @@ const app = Module({
   ),
 });
 
-const container = await app.compile([repo]);
+const container = await app.shake([repo]).compile();
 const userRepo = container.get(repo);
 await userRepo.findUser('42');
 ```
 
 `toFactory` receives dependencies as positional parameters in the same order as its key tuple. Factories may be synchronous or asynchronous.
 
-## LazyContainer vs EagerContainer
+## Tree-shaking with `shake`
 
-`wire` returns a `LazyContainer` — calling `.get(key)` triggers resolution on demand and returns a `Promise`. Dependencies resolved in the same `wire` call share memoized promises.
-
-`compile` resolves everything up front and returns an `EagerContainer` — `.get(key)` is synchronous and returns the value directly. Use `compile` when you want all values ready before proceeding.
+`shake(keys)` returns a new module containing only the given keys and their transitive dependencies. Use it to avoid resolving providers you don't need.
 
 ```ts
-// Lazy — resolves on demand
-const lazy = app.wire(['config', repo]);
-const cfg = await lazy.get('config');
-
-// Eager — resolves everything first
-const eager = await app.compile(['config', repo]);
-const cfg2 = eager.get('config'); // synchronous
+const container = await app.shake([repo]).compile();
+// Only 'config', 'database', and 'repo' are resolved.
+// Any other keys in the module are excluded.
 ```
+
+Calling `compile()` without `shake` resolves every key in the module.
 
 ## Class providers
 
@@ -123,7 +117,7 @@ const greetings = Module({
   greeter: toClass(['message', 'excited'], Greeter),
 });
 
-const container = await greetings.compile(['greeter']);
+const container = await greetings.shake(['greeter']).compile();
 container.get('greeter').shout(); // "hello!"
 ```
 
@@ -141,7 +135,7 @@ const testOverrides = Module({
 });
 
 const testApp = app.merge(testOverrides);
-const container = await testApp.compile(['config']);
+const container = await testApp.compile();
 container.get('config').url; // 'postgres://localhost/test'
 ```
 
@@ -149,7 +143,7 @@ The original modules are not mutated.
 
 ## Type safety
 
-`wyr-ts` encodes each provider's dependency input types and output type. Calling `wire()` or `compile()` is a compile error unless the full graph is valid. Calling `wire([keys])` or `compile([keys])` is a compile error unless the transitive subgraph for those keys is valid.
+`wyr-ts` encodes each provider's dependency input types and output type. Calling `compile()` is a compile error unless the full graph is valid. Calling `shake(keys).compile()` is a compile error unless the transitive subgraph for those keys is valid.
 
 TypeScript checks that:
 
@@ -164,21 +158,19 @@ const broken = Module({
   // 'name' is never provided
 });
 
-// Type error: 'name' is missing from the module.
-broken.wire();
+// @ts-expect-error — 'name' is missing from the module
 broken.compile();
 
-// But unrelated valid keys are still accessible:
+// But unrelated valid keys are still accessible after shake:
 const partial = Module({
   count: toValue(42),
   greeting: toFactory(['name'], (s: string) => s),
 });
 
-partial.wire(['count']);    // ok — 'count' has no deps
-partial.compile(['count']); // ok
+partial.shake(['count']).compile(); // ok — 'count' has no deps
 
 // @ts-expect-error — 'name' is transitively missing
-partial.wire(['greeting']);
+partial.shake(['greeting']).compile();
 ```
 
 The `validity?` phantom field on a module is typed as `GraphErr<Graph>`, which surfaces the full error map for invalid graphs — hover over a module variable in your IDE to inspect wiring problems per key.
@@ -188,10 +180,10 @@ Runtime guards still reject missing providers and circular dependencies if you b
 ## Runtime behavior
 
 - A module is immutable after creation.
-- Every `wire` or `compile` call uses a fresh resolution container.
+- Every `compile` call uses a fresh resolution container.
 - Within a single call, shared dependencies are resolved once (memoized promises).
 - Independent dependencies are resolved concurrently with `Promise.all`.
-- Factory errors are not swallowed; they reject the `compile` promise or the individual `.get()` promise on a `LazyContainer`.
+- Factory errors are not swallowed; they reject the `compile` promise.
 
 ## Development
 

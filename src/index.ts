@@ -159,12 +159,7 @@ export type GraphErr<Graph extends AnyGraph> = Simplify<{
     : K]: UnwrapErr<WireableKey<Graph, K & PropertyKey>>;
 }>;
 
-type ScopedGraphErr<
-  Graph extends AnyGraph,
-  Keys extends readonly (keyof Graph)[],
-> = GraphErr<{ [K in TransitiveKeys<Graph, Keys[number]>]: Graph[K] }>;
-
-// ─── TransitiveKeys / KTM ────────────────────────────────────────────────────
+// ─── TransitiveKeys / ShakenGraph ────────────────────────────────────────────
 
 type TransitiveKeys<Graph extends AnyGraph, K extends keyof Graph> =
   | K
@@ -174,18 +169,15 @@ type TransitiveKeys<Graph extends AnyGraph, K extends keyof Graph> =
         : never
       : never);
 
-type KTM<Graph extends AnyGraph, Keys extends readonly (keyof Graph)[]> = {
-  [K in TransitiveKeys<Graph, Keys[number]>]: ProviderOut<Graph[K]>;
-};
+type ShakenGraph<
+  Graph extends AnyGraph,
+  Keys extends readonly (keyof Graph)[],
+> = { [K in TransitiveKeys<Graph, Keys[number]>]: Graph[K] };
 
-// ─── Container interfaces ─────────────────────────────────────────────────────
+// ─── Container ───────────────────────────────────────────────────────────────
 
-export interface EagerContainer<M extends {}> {
+export interface Container<M extends {}> {
   get<K extends keyof M>(key: K): M[K];
-}
-
-export interface LazyContainer<M extends {}> {
-  get<K extends keyof M>(key: K): Promise<M[K]>;
 }
 
 // ─── Module ───────────────────────────────────────────────────────────────────
@@ -196,44 +188,29 @@ export interface Module<Graph extends AnyGraph> {
     module: Module<NewGraph>,
   ): Module<MergeGraphs<Graph, NewGraph>>;
 
-  wire(
-    this: ValidModule<Graph>,
-  ): LazyContainer<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>;
-  wire<const Keys extends readonly (keyof Graph)[]>(
-    this: ScopedValidModule<Graph, Keys>,
+  shake<const Keys extends readonly (keyof Graph)[]>(
     keys: Keys,
-  ): LazyContainer<KTM<Graph, Keys>>;
+  ): Module<ShakenGraph<Graph, Keys>>;
 
   compile(
     this: ValidModule<Graph>,
-  ): Promise<EagerContainer<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>>;
-  compile<const Keys extends readonly (keyof Graph)[]>(
-    this: ScopedValidModule<Graph, Keys>,
-    keys: Keys,
-  ): Promise<EagerContainer<KTM<Graph, Keys>>>;
+  ): Promise<Container<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>>;
 }
 
 interface ValidModule<Graph extends AnyGraph> extends Module<Graph> {
   readonly validity?: GraphErr<Graph>;
 }
 
-interface ScopedValidModule<
-  Graph extends AnyGraph,
-  Keys extends readonly (keyof Graph)[],
-> extends Module<Graph> {
-  readonly validity?: ScopedGraphErr<Graph, Keys>;
-}
-
 type URegistry = Record<PropertyKey, AnyProvider>;
-type UContainer = Map<PropertyKey, Promise<unknown>>;
+type UCache = Map<PropertyKey, Promise<unknown>>;
 
 const resolve = async (
   key: PropertyKey,
   registry: URegistry,
-  container: UContainer,
+  cache: UCache,
   trace: readonly PropertyKey[],
 ): Promise<unknown> => {
-  const cached = container.get(key);
+  const cached = cache.get(key);
   if (cached) return cached;
 
   const provider = registry[key];
@@ -248,35 +225,16 @@ const resolve = async (
   const promise = Promise.all(
     [...provider.deps].map(
       async (depKey) =>
-        [
-          depKey,
-          await resolve(depKey, registry, container, nextTrace),
-        ] as const,
+        [depKey, await resolve(depKey, registry, cache, nextTrace)] as const,
     ),
   ).then((entries) => provider.call(Object.fromEntries(entries) as never));
 
-  container.set(key, promise);
+  cache.set(key, promise);
   return promise;
 };
 
-class InternalLazyContainer<M extends Record<PropertyKey, unknown>>
-  implements LazyContainer<M>
-{
-  readonly #container: UContainer;
-
-  constructor(container: UContainer) {
-    this.#container = container;
-  }
-
-  get<K extends keyof M>(key: K): Promise<M[K]> {
-    const p = this.#container.get(key as PropertyKey);
-    if (!p) throw new Error(`Key not in container: ${String(key)}`);
-    return p as Promise<M[K]>;
-  }
-}
-
-class InternalEagerContainer<M extends Record<PropertyKey, unknown>>
-  implements EagerContainer<M>
+class InternalContainer<M extends Record<PropertyKey, unknown>>
+  implements Container<M>
 {
   readonly #values: Record<PropertyKey, unknown>;
 
@@ -304,60 +262,46 @@ class InternalModule<Graph extends AnyGraph> implements Module<Graph> {
   ): Module<MergeGraphs<Graph, NewGraph>> {
     const newRegistry = {
       ...this.#registry,
-      ...(module as InternalModule<NewGraph>).#registry,
+      ...(module as unknown as InternalModule<NewGraph>).#registry,
     };
     return new InternalModule(newRegistry) as unknown as Module<
       MergeGraphs<Graph, NewGraph>
     >;
   }
 
-  wire(): LazyContainer<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>;
-  wire<const Keys extends readonly (keyof Graph)[]>(
+  shake<const Keys extends readonly (keyof Graph)[]>(
     keys: Keys,
-  ): LazyContainer<KTM<Graph, Keys>>;
-  wire(
-    this: InternalModule<Graph>,
-    keys?: readonly PropertyKey[],
-  ): LazyContainer<Record<PropertyKey, unknown>> {
-    const targets =
-      keys ??
-      (Object.keys(this.#registry) as PropertyKey[]).concat(
-        Object.getOwnPropertySymbols(this.#registry),
-      );
-    const container: UContainer = new Map();
-    for (const k of targets) {
-      resolve(k, this.#registry, container, []);
-    }
-    return new InternalLazyContainer(container) as LazyContainer<
-      Record<PropertyKey, unknown>
+  ): Module<ShakenGraph<Graph, Keys>> {
+    const visited = new Set<PropertyKey>();
+    const visit = (key: PropertyKey): void => {
+      if (visited.has(key)) return;
+      visited.add(key);
+      const provider = this.#registry[key];
+      if (provider) {
+        for (const dep of provider.deps) visit(dep);
+      }
+    };
+    for (const k of keys) visit(k as PropertyKey);
+    const shaken: URegistry = {};
+    for (const k of visited) shaken[k] = this.#registry[k]!;
+    return new InternalModule(shaken) as unknown as Module<
+      ShakenGraph<Graph, Keys>
     >;
   }
 
-  compile(): Promise<
-    EagerContainer<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>
-  >;
-  compile<const Keys extends readonly (keyof Graph)[]>(
-    keys: Keys,
-  ): Promise<EagerContainer<KTM<Graph, Keys>>>;
-  async compile(
-    this: InternalModule<Graph>,
-    keys?: readonly PropertyKey[],
-  ): Promise<EagerContainer<Record<PropertyKey, unknown>>> {
-    const targets =
-      keys ??
-      (Object.keys(this.#registry) as PropertyKey[]).concat(
-        Object.getOwnPropertySymbols(this.#registry),
-      );
-    const container: UContainer = new Map();
+  compile(): Promise<Container<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>>;
+  async compile(): Promise<Container<Record<PropertyKey, unknown>>> {
+    const targets = (Object.keys(this.#registry) as PropertyKey[]).concat(
+      Object.getOwnPropertySymbols(this.#registry),
+    );
+    const cache: UCache = new Map();
     await Promise.all(
-      targets.map((k) => resolve(k, this.#registry, container, [])),
+      targets.map((k) => resolve(k, this.#registry, cache, [])),
     );
     const entries = await Promise.all(
-      [...container.keys()].map(
-        async (k) => [k, await container.get(k)!] as const,
-      ),
+      [...cache.keys()].map(async (k) => [k, await cache.get(k)!] as const),
     );
-    return new InternalEagerContainer(Object.fromEntries(entries));
+    return new InternalContainer(Object.fromEntries(entries));
   }
 }
 

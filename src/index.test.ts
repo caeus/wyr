@@ -38,91 +38,12 @@ const appModule = Module({
 }).merge(baseModule);
 
 describe('Module', () => {
-  describe('wire (LazyContainer)', () => {
-    test('no keys — covers all keys, .get returns promise of correct value', async () => {
-      const container = appModule.wire();
-      await expect(container.get(symKey)).resolves.toBe('hola');
-      await expect(container.get(numKey)).resolves.toBe(true);
-      await expect(container.get('count')).resolves.toBe(42);
-    });
-
-    test('scoped keys — container includes targets and transitives', async () => {
-      const container = appModule.wire(['greeting']);
-      await expect(container.get('greeting')).resolves.toStrictEqual([
-        'hola',
-        true,
-      ]);
-      await expect(container.get(symKey)).resolves.toBe('hola');
-      await expect(container.get(numKey)).resolves.toBe(true);
-    });
-
-    test('memoises — factory invoked only once across multiple .get calls', async () => {
-      let invocations = 0;
-      const m = Module({
-        greeting: toFactory([], async () => {
-          invocations += 1;
-          return 'hola';
-        }),
-      });
-      const container = m.wire();
-      await container.get('greeting');
-      await container.get('greeting');
-      expect(invocations).toBe(1);
-    });
-
-    test('rejects when a dependency is absent', async () => {
-      const missingDep = Module({
-        greeting: toFactory(['name', 'excited'], (s, b) => [s, b]),
-      });
-      await expect(
-        (missingDep as never as typeof appModule).compile(['greeting']),
-      ).rejects.toThrow(/No provider registered for key/i);
-    });
-
-    test('rejects circular dependencies', async () => {
-      const cyclic = Module({
-        a: toFactory(['b'], async (x: string) => x),
-        b: toFactory(['a'], async (x: string) => x),
-      });
-      await expect((cyclic as any).compile(['a'])).rejects.toThrow(
-        /circular dependency/i,
-      );
-    });
-
-    test('bubbles up factory exceptions', async () => {
-      const kaboom = new Error('kaboom');
-      const failing = Module({
-        name: toFactory([], async () => {
-          throw kaboom;
-        }),
-        greeting: toFactory(['name'], async (s: string) => s),
-      });
-      await expect(failing.compile(['greeting'])).rejects.toThrow(kaboom);
-    });
-  });
-
-  describe('LazyContainer', () => {
-    test('get throws for a key not in the container', () => {
-      const container = appModule.wire(['greeting']);
-      expect(() => container.get('count' as never)).toThrow(
-        /Key not in container/i,
-      );
-    });
-  });
-
-  describe('compile (EagerContainer)', () => {
-    test('no keys — covers all keys, .get is synchronous', async () => {
+  describe('compile (Container)', () => {
+    test('resolves all keys, .get is synchronous', async () => {
       const container = await appModule.compile();
       expect(container.get(symKey)).toBe('hola');
       expect(container.get(numKey)).toBe(true);
       expect(container.get('count')).toBe(42);
-    });
-
-    test('scoped keys — container includes targets and transitives', async () => {
-      const container = await appModule.compile(['greeting']);
-      expect(container.get('greeting')).toStrictEqual(['hola', true]);
-      expect(container.get(symKey)).toBe('hola');
-      expect(container.get(numKey)).toBe(true);
     });
 
     test('resolves dependencies in parallel', async () => {
@@ -146,8 +67,55 @@ describe('Module', () => {
       expect(elapsed).toBeLessThan(200);
     });
 
+    test('memoises — factory invoked only once even when depended on by multiple providers', async () => {
+      let invocations = 0;
+      const m = Module({
+        base: toFactory([], async () => {
+          invocations += 1;
+          return 'hola';
+        }),
+        a: toFactory(['base'], async (s: string) => s + '!'),
+        b: toFactory(['base'], async (s: string) => s + '?'),
+      });
+      const container = await m.compile();
+      expect(container.get('a')).toBe('hola!');
+      expect(container.get('b')).toBe('hola?');
+      expect(container.get('base')).toBe('hola');
+      expect(invocations).toBe(1);
+    });
+
+    test('rejects when a dependency is absent', async () => {
+      const missingDep = Module({
+        greeting: toFactory(['name', 'excited'], (s, b) => [s, b]),
+      });
+      await expect(
+        (missingDep as never as typeof appModule).compile(),
+      ).rejects.toThrow(/No provider registered for key/i);
+    });
+
+    test('rejects circular dependencies', async () => {
+      const cyclic = Module({
+        a: toFactory(['b'], async (x: string) => x),
+        b: toFactory(['a'], async (x: string) => x),
+      });
+      await expect((cyclic as any).compile()).rejects.toThrow(
+        /circular dependency/i,
+      );
+    });
+
+    test('bubbles up factory exceptions', async () => {
+      const kaboom = new Error('kaboom');
+      const failing = Module({
+        name: toFactory([], async () => {
+          throw kaboom;
+        }),
+        greeting: toFactory(['name'], async (s: string) => s),
+      });
+      await expect(failing.compile()).rejects.toThrow(kaboom);
+    });
+
     test('get throws for a key not in the container', async () => {
-      const container = await appModule.compile(['greeting']);
+      const container = await appModule.shake(['greeting']).compile();
       expect(() => container.get('count' as never)).toThrow(
         /Key not in container/i,
       );
@@ -161,12 +129,28 @@ describe('Module', () => {
     });
   });
 
+  describe('shake', () => {
+    test('keeps target keys and their transitive deps', async () => {
+      const container = await appModule.shake(['greeting']).compile();
+      expect(container.get('greeting')).toStrictEqual(['hola', true]);
+      expect(container.get(symKey)).toBe('hola');
+      expect(container.get(numKey)).toBe(true);
+    });
+
+    test('drops keys not in the transitive closure', async () => {
+      const container = await appModule.shake(['greeting']).compile();
+      expect(() => container.get('count' as never)).toThrow(
+        /Key not in container/i,
+      );
+    });
+  });
+
   describe('merge', () => {
     test('prefers bindings from the argument module', async () => {
       const base = Module({ flag: toValue(false) });
       const patch = Module({ flag: toValue(true) });
       const merged = base.merge(patch);
-      const container = await merged.compile(['flag']);
+      const container = await merged.compile();
       expect(container.get('flag')).toBe(true);
     });
   });
@@ -178,7 +162,7 @@ describe('Module', () => {
         excited: toValue(true),
         greeter: toClass(['message', 'excited'], Greeter),
       });
-      const container = await m.compile(['greeter']);
+      const container = await m.shake(['greeter']).compile();
       const greeter = container.get('greeter');
       expect(greeter).toBeInstanceOf(Greeter);
       expect(greeter.shout()).toBe('hola!');
@@ -258,7 +242,7 @@ describe('Module', () => {
     );
 
     typeTest(
-      'wire() and compile() on a module with missing deps are compile errors',
+      'compile() on a module with missing deps is a compile error',
       () => {
         const broken = Module({
           greeting: toFactory([symKey, numKey], (s: string, b: boolean) => [
@@ -267,14 +251,12 @@ describe('Module', () => {
           ]),
         });
         // @ts-expect-error — symKey and numKey are missing from the module
-        broken.wire();
-        // @ts-expect-error — symKey and numKey are missing from the module
         broken.compile();
       },
     );
 
     typeTest(
-      'wire(keys) and compile(keys) are compile errors only for keys with wiring errors',
+      'shake(keys).compile() is a compile error only for keys with wiring errors',
       () => {
         const partiallyBroken = Module({
           count: toValue(42),
@@ -283,14 +265,11 @@ describe('Module', () => {
             b,
           ]),
         });
-        // count has no deps — valid scope, no error
-        partiallyBroken.wire(['count']);
-        partiallyBroken.compile(['count']);
+        // count has no deps — valid after shake, no error
+        partiallyBroken.shake(['count']).compile();
         // greeting has missing transitive deps — blocked
         // @ts-expect-error — symKey and numKey are transitively missing
-        partiallyBroken.wire(['greeting']);
-        // @ts-expect-error — symKey and numKey are transitively missing
-        partiallyBroken.compile(['greeting']);
+        partiallyBroken.shake(['greeting']).compile();
       },
     );
   });
