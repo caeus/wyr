@@ -202,7 +202,7 @@ export interface Module<Graph extends AnyGraph> {
   ): Promise<Container<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>>;
 }
 
-interface ValidModule<Graph extends AnyGraph> extends Module<Graph> {
+export interface ValidModule<Graph extends AnyGraph> extends Module<Graph> {
   readonly validity?: GraphErr<Graph>;
 }
 

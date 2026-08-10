@@ -1,6 +1,6 @@
 {
   "name": "wyr-ts",
-  "version": "2.0.2-rc1",
+  "version": "2.0.2-rc2",
   "description": "",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
