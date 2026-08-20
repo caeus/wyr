@@ -1,0 +1,57 @@
+# Publishes to npm when a version tag is pushed:
+#
+#   git tag v2.1.0-rc0 && git push origin v2.1.0-rc0
+#
+# Authentication is tokenless: npm is configured as a Trusted Publisher for
+# this repo, so it accepts the OIDC identity Actions mints below. There is no
+# NPM_TOKEN secret to rotate. The npm side is keyed to this file's name —
+# renaming this workflow breaks publishing until npm is updated to match.
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write # npm provenance attestation
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Trusted publishing needs a newer npm than Node 22 bundles.
+      - run: npm i -g npm@latest
+
+      - run: npm ci
+
+      # Fail before building rather than shipping a version nobody tagged.
+      - name: Verify tag matches package.json
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          declared="$(node -p 'require("./package.json").version')"
+          if [ "$tagged" != "$declared" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} declares ${tagged}, package.json says ${declared}"
+            exit 1
+          fi
+
+      # lint, tests, typecheck and typedoc all gate the publish
+      - run: make build
+
+      # Prereleases go out as `next`; only clean semver may move `latest`.
+      - name: Publish
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          case "$version" in
+            *-*) dist_tag=next ;;
+            *) dist_tag=latest ;;
+          esac
+          echo "publishing ${version} under dist-tag ${dist_tag}"
+          npm publish --provenance --access public --tag "$dist_tag"
