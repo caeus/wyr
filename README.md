@@ -1,17 +1,17 @@
-# wyr-ts
+# @caeus/wyr
 
 Deterministic dependency graphs for TypeScript.
 
-`wyr-ts` is a small dependency wiring library for explicit, immutable provider graphs. You declare providers up front, compose modules with `merge`, tree-shake with `shake`, and resolve everything with `compile`. The TypeScript type system validates missing dependencies, mismatched dependency types, and circular dependency graphs at the call site.
+`@caeus/wyr` is a small dependency wiring library for explicit, immutable provider graphs. You declare providers up front, compose modules with `merge`, tree-shake with `shake`, and resolve everything with `compile`. The TypeScript type system validates missing dependencies, mismatched dependency types, and circular dependency graphs at the call site.
 
 ## Installation
 
 ```bash
-npm install wyr-ts
+npm install @caeus/wyr
 ```
 
 ```ts
-import { Module, toClass, toFactory, toValue } from 'wyr-ts';
+import { Module, toClass, toFactory, toValue } from '@caeus/wyr';
 ```
 
 ## API at a glance
@@ -68,7 +68,7 @@ const services = Module({
 ## Basic usage
 
 ```ts
-import { Module, toFactory, toValue } from 'wyr-ts';
+import { Module, toFactory, toValue } from '@caeus/wyr';
 
 const database = Symbol('database');
 const repo = Symbol('repo');
@@ -155,7 +155,7 @@ The original modules are not mutated.
 
 ## Type safety
 
-`wyr-ts` encodes each provider's dependency input types and output type. Calling `compile()` is a compile error unless the full graph is valid. Calling `shake(keys).compile()` is a compile error unless the transitive subgraph for those keys is valid.
+`@caeus/wyr` encodes each provider's dependency input types and output type. Calling `compile()` is a compile error unless the full graph is valid. Calling `shake(keys).compile()` is a compile error unless the transitive subgraph for those keys is valid.
 
 TypeScript checks that:
 
@@ -235,7 +235,7 @@ The field is declared, never assigned: nothing is emitted for it and it cannot b
 Because the ghost field carries the resolved types, a function can demand a module that compiles *and* exposes particular bindings, without naming the graph:
 
 ```ts
-import { ValidModule } from 'wyr-ts';
+import { ValidModule } from '@caeus/wyr';
 
 declare function boot(module: ValidModule<{ db: Db }>): Promise<void>;
 ```
