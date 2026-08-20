@@ -96,67 +96,137 @@ export const toClass = <
 declare const _ok: unique symbol;
 declare const _err: unique symbol;
 
-type Ok<T> = { readonly [_ok]: T };
-type Err<Msg extends string, Ctx extends {} = {}> = {
-  readonly [_err]: { readonly message: Msg; readonly ctx: Ctx };
-};
+export type Ok<T> = { readonly [_ok]: T };
+export type Failed<E> = { readonly [_err]: E };
 
-// ─── Wireable ────────────────────────────────────────────────────────────────
+// ─── Graph errors ────────────────────────────────────────────────────────────
 
-type WireableDeps<
-  Graph extends AnyGraph,
-  Deps extends {},
-  Trace extends readonly PropertyKey[],
-> = [keyof Deps] extends [never]
-  ? Ok<unknown>
-  : {
-        [K in keyof Deps]: WireableKey<Graph, K & PropertyKey, Trace, Deps[K]>;
-      }[keyof Deps] extends infer R
-    ? [R] extends [Ok<unknown>]
-      ? Ok<unknown>
-      : Exclude<R, Ok<unknown>>
-    : Err<'unreachable', object>;
-
-type WireableKey<
+type DepsOf<
   Graph extends AnyGraph,
   K extends PropertyKey,
-  Trace extends readonly PropertyKey[] = readonly [],
-  Expected = unknown,
-> = K extends Trace[number]
-  ? Err<'circular dependency', { key: K; trace: Trace }>
-  : K extends keyof Graph
-    ? ProviderOut<Graph[K]> extends Expected
-      ? WireableDeps<
-          Graph,
-          ProviderIn<Graph[K]>,
-          readonly [...Trace, K]
-        > extends infer Deps
-        ? Deps extends Ok<unknown>
-          ? Ok<ProviderOut<Graph[K]>>
-          : Deps extends Err<string, object>
-            ? Deps
-            : Err<'unreachable', object>
-        : Err<'unreachable', object>
-      : Err<
-          'type mismatch',
-          {
-            key: K;
-            expected: Expected;
-            got: ProviderOut<Graph[K]>;
-            trace: Trace;
-          }
-        >
-    : Err<'missing key', { key: K; trace: Trace }>;
+> = K extends keyof Graph ? keyof ProviderIn<Graph[K]> & PropertyKey : never;
 
-type UnwrapErr<E> =
-  E extends Err<infer Msg extends string, infer Ctx extends object>
-    ? { message: Msg; ctx: Ctx }
+type Expects<
+  Graph extends AnyGraph,
+  K extends keyof Graph,
+  D extends PropertyKey,
+> = D extends keyof ProviderIn<Graph[K]> ? ProviderIn<Graph[K]>[D] : never;
+
+// Every key the graph talks about — provided, or merely depended upon.
+type MentionedKeys<Graph extends AnyGraph> =
+  | keyof Graph
+  | { [K in keyof Graph]: DepsOf<Graph, K> }[keyof Graph];
+
+type RequiredBy<Graph extends AnyGraph, K extends PropertyKey> = {
+  [P in keyof Graph]: K extends DepsOf<Graph, P> ? P : never;
+}[keyof Graph];
+
+// Deps of K whose provider resolves to something K cannot accept.
+type MismatchedDeps<Graph extends AnyGraph, K extends keyof Graph> = {
+  [D in DepsOf<Graph, K> as D extends keyof Graph
+    ? ProviderOut<Graph[D]> extends Expects<Graph, K, D>
+      ? never
+      : D
+    : never]: {
+    expected: Expects<Graph, K, D>;
+    got: D extends keyof Graph ? ProviderOut<Graph[D]> : never;
+  };
+};
+
+// Walks from Origin looking for a path back to it; the path is the cycle.
+type CycleFrom<
+  Graph extends AnyGraph,
+  Origin extends PropertyKey,
+  K extends PropertyKey,
+  Seen extends readonly PropertyKey[],
+> = {
+  [D in DepsOf<Graph, K>]: D extends Origin
+    ? readonly [...Seen, K, Origin]
+    : D extends Seen[number] | K
+      ? never
+      : CycleFrom<Graph, Origin, D, readonly [...Seen, K]>;
+}[DepsOf<Graph, K>];
+
+type UnprovidedErr<
+  Graph extends AnyGraph,
+  K extends PropertyKey,
+> = K extends keyof Graph
+  ? {}
+  : { unprovided: { requiredBy: RequiredBy<Graph, K> } };
+
+type MismatchedErr<
+  Graph extends AnyGraph,
+  K extends PropertyKey,
+> = K extends keyof Graph
+  ? [keyof MismatchedDeps<Graph, K>] extends [never]
+    ? {}
+    : { mismatched: Simplify<MismatchedDeps<Graph, K>> }
+  : {};
+
+type CircularErr<Graph extends AnyGraph, K extends PropertyKey> = [
+  CycleFrom<Graph, K, K, readonly []>,
+] extends [never]
+  ? {}
+  : { circular: CycleFrom<Graph, K, K, readonly []> };
+
+// Problems belonging to K itself, needing no recursion into dependents.
+type OwnErr<Graph extends AnyGraph, K extends PropertyKey> = UnprovidedErr<
+  Graph,
+  K
+> &
+  MismatchedErr<Graph, K> &
+  CircularErr<Graph, K>;
+
+type HasErr<
+  Graph extends AnyGraph,
+  K extends PropertyKey,
+  Seen extends readonly PropertyKey[],
+> = [keyof OwnErr<Graph, K>] extends [never]
+  ? true extends {
+      [D in DepsOf<Graph, K>]: D extends Seen[number]
+        ? false
+        : HasErr<Graph, D, readonly [...Seen, K]>;
+    }[DepsOf<Graph, K>]
+    ? true
+    : false
+  : true;
+
+type Unmet<Graph extends AnyGraph, K extends PropertyKey> = [
+  FailedDeps<Graph, K>,
+] extends [never]
+  ? {}
+  : { unmet: FailedDeps<Graph, K> };
+
+// [T] extends [never] first: inferring from a bare `never` succeeds vacuously
+// with M as unknown, which would exempt every dep from `unmet`.
+type Members<T> = [T] extends [never]
+  ? never
+  : T extends readonly (infer M)[]
+    ? M
     : never;
 
-export type GraphErr<Graph extends AnyGraph> = Simplify<{
-  [K in keyof Graph as WireableKey<Graph, K & PropertyKey> extends Ok<unknown>
+type CycleMembers<Graph extends AnyGraph, K extends PropertyKey> = Members<
+  CycleFrom<Graph, K, K, readonly []>
+>;
+
+// A cycle member's partners are already explained by `circular`; reporting them
+// as unmet too would double every cycle entry.
+type FailedDeps<Graph extends AnyGraph, K extends PropertyKey> = {
+  [D in DepsOf<Graph, K>]: D extends CycleMembers<Graph, K>
     ? never
-    : K]: UnwrapErr<WireableKey<Graph, K & PropertyKey>>;
+    : HasErr<Graph, D, readonly [K]> extends true
+      ? D
+      : never;
+}[DepsOf<Graph, K>];
+
+type KeyErr<Graph extends AnyGraph, K extends PropertyKey> = Simplify<
+  OwnErr<Graph, K> & Unmet<Graph, K>
+>;
+
+export type GraphErr<Graph extends AnyGraph> = Simplify<{
+  [K in MentionedKeys<Graph> as [keyof KeyErr<Graph, K>] extends [never]
+    ? never
+    : K]: KeyErr<Graph, K>;
 }>;
 
 // ─── TransitiveKeys / ShakenGraph ────────────────────────────────────────────
@@ -185,10 +255,24 @@ export interface Container<M extends {}> {
   get<K extends keyof M>(key: K): M[K];
 }
 
+export type Resolved<Graph extends AnyGraph> = {
+  [K in keyof Graph]: ProviderOut<Graph[K]>;
+} & {};
+
+// ─── Compilation ─────────────────────────────────────────────────────────────
+
+export declare const compilation: unique symbol;
+
+export type Compilation<Graph extends AnyGraph> = [
+  keyof GraphErr<Graph>,
+] extends [never]
+  ? Ok<Resolved<Graph>>
+  : Failed<GraphErr<Graph>>;
+
 // ─── Module ───────────────────────────────────────────────────────────────────
 
 export interface Module<Graph extends AnyGraph> {
-  readonly validity?: {};
+  readonly [compilation]?: Compilation<Graph>;
   merge<NewGraph extends AnyGraph>(
     module: Module<NewGraph>,
   ): Module<MergeGraphs<Graph, NewGraph>>;
@@ -198,12 +282,13 @@ export interface Module<Graph extends AnyGraph> {
   ): Module<ShakenGraph<Graph, Keys>>;
 
   compile(
-    this: ValidModule<Graph>,
-  ): Promise<Container<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>>;
+    this: Module<Graph> & { readonly [compilation]?: Ok<unknown> },
+  ): Promise<Container<Resolved<Graph>>>;
 }
 
-export interface ValidModule<Graph extends AnyGraph> extends Module<Graph> {
-  readonly validity?: GraphErr<Graph>;
+export interface ValidModule<Exports extends {} = {}> {
+  readonly [compilation]?: Ok<Exports>;
+  compile(): Promise<Container<Exports>>;
 }
 
 type URegistry = Record<PropertyKey, AnyProvider>;
@@ -255,7 +340,7 @@ class InternalContainer<M extends Record<PropertyKey, unknown>>
 }
 
 class InternalModule<Graph extends AnyGraph> implements Module<Graph> {
-  declare readonly validity?: {};
+  declare readonly [compilation]?: Compilation<Graph>;
   readonly #registry: URegistry;
 
   constructor(registry: URegistry) {

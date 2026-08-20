@@ -22,8 +22,20 @@ import { Module, toClass, toFactory, toValue } from 'wyr-ts';
 | `toValue(value)`      | Registers a dependency-free constant or promise-backed value.                      |
 | `toFactory(keys, fn)` | Registers a factory whose positional arguments are resolved from `keys`.           |
 | `toClass(keys, ctor)` | Registers a class constructor whose positional arguments are resolved from `keys`. |
-| `GraphErr<Graph>`     | Type-level error map: keys with wiring problems mapped to their error details.     |
+| `GraphErr<Graph>`     | Type-level error map: every problematic key mapped to its problems. See below.     |
 | `AnyGraph`            | Base constraint for a record of providers; useful for generic utilities.           |
+
+Type-level only:
+
+| Export                  | Purpose                                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------------------- |
+| `ValidModule<Exports>`  | Contract for a module that compiles and exposes at least `Exports`. See below.               |
+| `Compilation<Graph>`    | `Ok<Resolved<Graph>>` if the graph wires up, otherwise `Failed<GraphErr<Graph>>`.             |
+| `Resolved<Graph>`       | Maps each binding key to the type its provider resolves to.                                  |
+| `Ok<T>` / `Failed<E>`   | The two branches of a compilation result.                                                    |
+| `compilation`           | The phantom field key. Type-only — import it with `import type`.                              |
+| `ShakenGraph<G, Keys>`  | The transitive closure of `Keys` within `G`, as produced by `shake`.                          |
+| `TransitiveKeys<G, K>`  | `K` plus every key it transitively depends on.                                                |
 
 A module exposes:
 
@@ -173,9 +185,87 @@ partial.shake(['count']).compile(); // ok — 'count' has no deps
 partial.shake(['greeting']).compile();
 ```
 
-The `validity?` phantom field on a module is typed as `GraphErr<Graph>`, which surfaces the full error map for invalid graphs — hover over a module variable in your IDE to inspect wiring problems per key.
-
 Runtime guards still reject missing providers and circular dependencies if you bypass the type system with casts.
+
+## Reading `GraphErr`
+
+`GraphErr<Graph>` maps each problematic key to a record of that key's problems. Keys with no problems do not appear, so a valid graph yields `{}`. Keys that are only *depended upon* appear too, even though no provider registers them — that is where an unprovided dependency is reported.
+
+| Field         | Meaning                                                         | Payload                               |
+| ------------- | --------------------------------------------------------------- | ------------------------------------- |
+| `unprovided`  | Nothing in the graph provides this key.                          | `{ requiredBy }` — union of requesters |
+| `unmet`       | A dependency of this key has problems of its own.                | union of the offending dep keys        |
+| `mismatched`  | A dependency resolves to a type this key cannot accept.          | record keyed by dep: `{ expected, got }` |
+| `circular`    | This key participates in a dependency cycle.                     | the cycle, rotated to start on this key |
+
+```ts
+const app = Module({
+  db: toFactory(['config'], (c: Config) => new Db(c)), // 'config' never provided
+  port: toValue('8080'),                                // a string
+  server: toFactory(['db', 'port'], (d: Db, p: number) => new Server(d, p)),
+});
+```
+
+`GraphErr<typeof app>` is:
+
+```ts
+{
+  config: { unprovided: { requiredBy: 'db' } };
+  db:     { unmet: 'config' };
+  server: { unmet: 'db'; mismatched: { port: { expected: number; got: string } } };
+}
+```
+
+Each defect is reported once, at the key responsible for it. `config` is named as the root cause a single time no matter how many bindings require it; `db` and `server` each point one hop back rather than repeating the root cause. `port` does not appear at all — it resolves fine, and the wrong expectation belongs to `server`, so a provider is never blamed for what a consumer expected of it. A key can carry several problems at once, as `server` does.
+
+## The compilation ghost field
+
+Every module carries a type-only phantom field holding its **compilation result**: what compiling the module would produce, or the errors compiling it would report.
+
+```ts
+readonly [compilation]?: Compilation<Graph>;
+```
+
+`Compilation<Graph>` is `Ok<Resolved<Graph>>` when the graph wires up, and `Failed<GraphErr<Graph>>` when it does not. Hover a module variable in your IDE to inspect either branch — a failed module shows the full error map, keyed by binding.
+
+The field is declared, never assigned: nothing is emitted for it and it cannot be observed at runtime. `compile()` is gated on it — `Failed` has no `Ok` member, so it is never assignable to `Ok<unknown>`.
+
+## Requiring a module
+
+Because the ghost field carries the resolved types, a function can demand a module that compiles *and* exposes particular bindings, without naming the graph:
+
+```ts
+import { ValidModule } from 'wyr-ts';
+
+declare function boot(module: ValidModule<{ db: Db }>): Promise<void>;
+```
+
+`Exports` is a lower bound on the compiled container: extra bindings are allowed, and each named binding must resolve to a subtype of what you asked for. A module resolving `db` to a `PostgresDb` satisfies `ValidModule<{ db: Db }>`.
+
+| Requirement                        | Written as                     |
+| ---------------------------------- | ------------------------------ |
+| any module that compiles           | `ValidModule`                  |
+| compiles, and exposes `db`         | `ValidModule<{ db: unknown }>` |
+| compiles, and `db` is a `Db`       | `ValidModule<{ db: Db }>`      |
+
+```ts
+const app = Module({
+  db: toFactory([], async () => new PostgresDb()),
+  logger: toValue(console),
+});
+
+const readDb = async (module: ValidModule<{ db: Db }>): Promise<Db> =>
+  (await module.compile()).get('db');
+
+readDb(app); // ok — 'logger' is extra, and PostgresDb is a Db
+
+declare function needsCache(module: ValidModule<{ cache: Cache }>): void;
+
+// @ts-expect-error — 'cache' is not a binding of this module
+needsCache(app);
+```
+
+`ValidModule` exposes only `compile()`. A consumer that needs to compose further should take `Module<Graph>` instead.
 
 ## Runtime behavior
 

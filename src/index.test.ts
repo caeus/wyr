@@ -1,10 +1,15 @@
 import { describe, expect, test } from 'vitest';
 import {
   AnyGraph,
+  Compilation,
+  Failed,
   GraphErr,
   Module,
+  Ok,
+  Resolved,
   ShakenGraph,
   TransitiveKeys,
+  ValidModule,
   toClass,
   toFactory,
   toValue,
@@ -13,6 +18,29 @@ import {
 declare function errOf<Graph extends AnyGraph>(
   module: Module<Graph>,
 ): GraphErr<Graph>;
+
+declare function compilationOf<Graph extends AnyGraph>(
+  module: Module<Graph>,
+): Compilation<Graph>;
+
+// Contract consumers — each demands a different requirement strength
+declare function anyValid(module: ValidModule): void;
+declare function exposesCount(module: ValidModule<{ count: unknown }>): void;
+declare function countIsNumber(module: ValidModule<{ count: number }>): void;
+declare function countIsString(module: ValidModule<{ count: string }>): void;
+declare function exposesMissing(
+  module: ValidModule<{ missing: unknown }>,
+): void;
+declare function petIsAnimal(module: ValidModule<{ pet: Animal }>): void;
+
+class Animal {
+  legs = 4;
+}
+class Dog extends Animal {
+  bark(): string {
+    return 'woof';
+  }
+}
 
 const typeTest = (s: string, _: () => void): void =>
   test(s, () => {
@@ -184,7 +212,7 @@ describe('Module', () => {
     });
 
     typeTest(
-      'missing deps: error type lists affected keys with missing key errors',
+      'an unprovided key is reported on itself, its dependents as unmet',
       () => {
         const broken = Module({
           greeting: toFactory([symKey, numKey], (s: string, b: boolean) => [
@@ -193,21 +221,32 @@ describe('Module', () => {
           ]),
         });
         expectTypeOf(errOf(broken)).toEqualTypeOf<{
-          readonly greeting:
-            | {
-                message: 'missing key';
-                ctx: { key: typeof numKey; trace: readonly ['greeting'] };
-              }
-            | {
-                message: 'missing key';
-                ctx: { key: typeof symKey; trace: readonly ['greeting'] };
-              };
+          greeting: { unmet: typeof symKey | typeof numKey };
+          [symKey]: { unprovided: { requiredBy: 'greeting' } };
+          0: { unprovided: { requiredBy: 'greeting' } };
         }>();
       },
     );
 
     typeTest(
-      'type mismatch: error type lists affected keys with type mismatch errors',
+      'a root cause is reported once; each dependent points one hop back',
+      () => {
+        const chain = Module({
+          b: toFactory(['a'], (s: string) => s),
+          c: toFactory(['b'], (s: string) => s),
+          d: toFactory(['c'], (s: string) => s),
+        });
+        expectTypeOf(errOf(chain)).toEqualTypeOf<{
+          a: { unprovided: { requiredBy: 'b' } };
+          b: { unmet: 'a' };
+          c: { unmet: 'b' };
+          d: { unmet: 'c' };
+        }>();
+      },
+    );
+
+    typeTest(
+      'a mismatch is reported on the dependent, keyed by the offending dep',
       () => {
         const mismatched = Module({
           excited: toValue('not a boolean' as string),
@@ -218,34 +257,23 @@ describe('Module', () => {
           ),
         });
         expectTypeOf(errOf(mismatched)).toEqualTypeOf<{
-          readonly greeting: {
-            message: 'type mismatch';
-            ctx: {
-              key: 'excited';
-              expected: boolean;
-              got: string;
-              trace: readonly ['greeting'];
-            };
+          greeting: {
+            mismatched: { excited: { expected: boolean; got: string } };
           };
         }>();
       },
     );
 
     typeTest(
-      'circular dep: error type lists affected keys with circular dependency errors',
+      'each cycle member reports the cycle, rotated to start on itself',
       () => {
         const cyclic = Module({
           a: toFactory(['b'], async (x: string) => x),
           b: toFactory(['a'], async (x: string) => x),
         });
-        const err = errOf(cyclic);
-        expectTypeOf(err.a).toMatchTypeOf<{
-          message: 'circular dependency';
-          ctx: object;
-        }>();
-        expectTypeOf(err.b).toMatchTypeOf<{
-          message: 'circular dependency';
-          ctx: object;
+        expectTypeOf(errOf(cyclic)).toEqualTypeOf<{
+          a: { circular: readonly ['a', 'b', 'a'] };
+          b: { circular: readonly ['b', 'a', 'b'] };
         }>();
       },
     );
@@ -323,5 +351,75 @@ describe('Module', () => {
         partiallyBroken.shake(['greeting']).compile();
       },
     );
+  });
+
+  describe('compilation', () => {
+    const brokenModule = Module({
+      greeting: toFactory([symKey, numKey], (s: string, b: boolean) => [s, b]),
+    });
+    type AppGraph = typeof appModule extends Module<infer G> ? G : never;
+    type BrokenGraph = typeof brokenModule extends Module<infer G> ? G : never;
+
+    typeTest('a wired module compiles to Ok of its resolved graph', () => {
+      expectTypeOf(compilationOf(appModule)).toEqualTypeOf<
+        Ok<Resolved<AppGraph>>
+      >();
+    });
+
+    typeTest(
+      'a module with missing deps compiles to Failed of its errors',
+      () => {
+        expectTypeOf(compilationOf(brokenModule)).toEqualTypeOf<
+          Failed<GraphErr<BrokenGraph>>
+        >();
+        expectTypeOf(compilationOf(brokenModule)).not.toMatchTypeOf<
+          Ok<unknown>
+        >();
+      },
+    );
+
+    typeTest('satisfies ValidModule contracts of increasing strength', () => {
+      anyValid(appModule);
+      exposesCount(appModule);
+      countIsNumber(appModule);
+    });
+
+    typeTest(
+      'an exported binding satisfies a contract for its supertype',
+      () => {
+        const pets = Module({ pet: toFactory([], async () => new Dog()) });
+        petIsAnimal(pets);
+      },
+    );
+
+    typeTest(
+      'rejects failed modules, absent keys, and mismatched types',
+      () => {
+        // @ts-expect-error — Failed is not assignable to Ok
+        anyValid(brokenModule);
+        // @ts-expect-error — appModule exposes no 'missing' key
+        exposesMissing(appModule);
+        // @ts-expect-error — 'count' resolves to number, not string
+        countIsString(appModule);
+      },
+    );
+
+    test('a contract consumer can compile and get typed bindings', async () => {
+      const readCount = async (
+        module: ValidModule<{ count: number }>,
+      ): Promise<number> => (await module.compile()).get('count');
+
+      expect(await readCount(appModule)).toBe(42);
+    });
+
+    typeTest('merge repairs a failed module', () => {
+      expectTypeOf(compilationOf(brokenModule)).not.toMatchTypeOf<
+        Ok<unknown>
+      >();
+
+      const repaired = brokenModule.merge(baseModule);
+      expectTypeOf(compilationOf(repaired)).toMatchTypeOf<Ok<unknown>>();
+      repaired.compile();
+    });
   });
 });
