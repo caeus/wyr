@@ -99,6 +99,17 @@ const stack = typescript({
       },
       ci: {
         ...index.ci,
+        typecheck: {
+          deps: ['build'],
+          run: ({ images }) => ({
+            FROM: images.build,
+            steps: [
+              { WORKDIR: '/repo' },
+              { RUN: 'pnpm exec tsc --noEmit' },
+            ],
+            IGNORE,
+          }),
+        },
         lint: {
           deps: ['install'],
           run: ({ images }) => ({
