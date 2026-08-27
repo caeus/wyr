@@ -1,57 +1,89 @@
-# Publishes to npm when a version tag is pushed:
+# Publishes an existing git tag to npm when manually dispatched.
 #
-#   git tag v2.1.0-rc0 && git push origin v2.1.0-rc0
-#
-# Authentication is tokenless: npm is configured as a Trusted Publisher for
-# this repo, so it accepts the OIDC identity Actions mints below. There is no
-# NPM_TOKEN secret to rotate. The npm side is keyed to this file's name —
-# renaming this workflow breaks publishing until npm is updated to match.
+# npm authentication is tokenless through Trusted Publishing. The npm trusted
+# publisher is keyed to this workflow filename, so do not rename it.
 name: publish
 
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish, for example v0.0.0-rc2
+        required: true
+        type: string
 
 permissions:
   contents: read
   id-token: write # npm provenance attestation
+
+concurrency:
+  group: publish-${{ inputs.tag }}
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate and checkout tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::invalid release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          if ! git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            echo "::error::tag does not exist: $RELEASE_TAG"
+            exit 1
+          fi
+          git checkout --detach "refs/tags/$RELEASE_TAG"
+
+      - name: Run checks and build package
+        run: ./.dagr/dagr run //:ci:pack //:ci:typecheck //:ci:docs
+
+      - name: Extract package
+        run: |
+          mkdir -p release
+          container="$(docker create ci-pack:latest)"
+          trap 'docker rm -f "$container" >/dev/null' EXIT
+          docker cp "$container:/out/." release/
+          test -f release/wyr.tgz
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          registry-url: https://registry.npmjs.org
 
-      # Trusted publishing needs a newer npm than Node 22 bundles.
-      - run: npm i -g npm@latest
+      # Trusted Publishing needs a newer npm than Node 22 bundles.
+      - run: npm install --global npm@latest
 
-      - run: npm ci
-
-      # Fail before building rather than shipping a version nobody tagged.
-      - name: Verify tag matches package.json
+      - name: Verify package version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          tagged="${GITHUB_REF_NAME#v}"
-          declared="$(node -p 'require("./package.json").version')"
+          tagged="${RELEASE_TAG#v}"
+          declared="$(
+            tar -xOf release/wyr.tgz package/package.json |
+              node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version'
+          )"
           if [ "$tagged" != "$declared" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} declares ${tagged}, package.json says ${declared}"
+            echo "::error::tag $RELEASE_TAG declares $tagged, package declares $declared"
             exit 1
           fi
 
-      # lint, tests, typecheck and typedoc all gate the publish
-      - run: make build
-
-      # Prereleases go out as `next`; only clean semver may move `latest`.
       - name: Publish
         run: |
-          version="$(node -p 'require("./package.json").version')"
+          version="$(
+            tar -xOf release/wyr.tgz package/package.json |
+              node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version'
+          )"
           case "$version" in
             *-*) dist_tag=next ;;
             *) dist_tag=latest ;;
           esac
-          echo "publishing ${version} under dist-tag ${dist_tag}"
-          npm publish --provenance --access public --tag "$dist_tag"
+          echo "publishing $version under dist-tag $dist_tag"
+          npm publish release/wyr.tgz --provenance --access public --tag "$dist_tag"
