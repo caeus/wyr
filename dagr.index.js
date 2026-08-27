@@ -184,7 +184,7 @@ const stack = typescript({
 // root package its real npm identity without coupling the mounted stack to this repository.
 export default stack({
   location: '//wyr',
-  version: '0.0.0-rc1',
+  version: '0.0.0-rc2',
   deps: [
     { npm: '@eslint/eslintrc', at: 'dev' },
     { npm: '@eslint/js', at: 'dev' },
