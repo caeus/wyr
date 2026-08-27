@@ -277,10 +277,20 @@ needsCache(app);
 
 ## Development
 
+Install the repository-pinned dagr launcher once:
+
 ```bash
-npx vitest run   # run tests
-npx eslint src   # lint
-npx tsc --noEmit # type-check
+.dagr/install.sh
+```
+
+Then run the build graph:
+
+```bash
+dagr run ci:test
+dagr run ci:lint
+dagr run ci:typecheck
+dagr run ci:build
+dagr run ci:docs
 ```
 
 ## License

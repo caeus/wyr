@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+WORKING_DIR="$(pwd)"
+dir="$WORKING_DIR"
+
+while [ "$dir" != "/" ]; do
+  if [ -d "$dir/.dagr" ]; then
+    WORKING_DIR="$WORKING_DIR" exec "$dir/.dagr/cli.sh" "$@"
+  fi
+  dir="$(dirname "$dir")"
+done
+
+echo "error: not inside a monorepo (no .dagr/ directory found in any parent)" >&2
+exit 1
