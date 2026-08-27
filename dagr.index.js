@@ -105,7 +105,7 @@ const stack = typescript({
             FROM: images.build,
             steps: [
               { WORKDIR: '/repo' },
-              { RUN: 'pnpm exec tsc --noEmit' },
+              { RUN: 'pnpm exec tsc -p tsconfig.build.json --noEmit' },
             ],
             IGNORE,
           }),
