@@ -157,7 +157,7 @@ const stack = typescript({
             steps: [
               { COPY: { src: 'typedoc.json', dest: '/repo/typedoc.json' } },
               { WORKDIR: '/repo' },
-              { RUN: 'pnpm exec typedoc' },
+              { RUN: 'pnpm exec typedoc --tsconfig tsconfig.build.json' },
             ],
             IGNORE,
             EXPORT: { '/repo/docs/': 'docs/' },
