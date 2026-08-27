@@ -118,6 +118,7 @@ const stack = typescript({
             FROM: images.install,
             steps: [
               { COPY: { src: 'src', dest: '/repo/src' } },
+              { COPY: { src: 'vitest.config.ts', dest: '/repo/vitest.config.ts' } },
               { WORKDIR: '/repo' },
               { RUN: 'pnpm exec vitest run' },
             ],
