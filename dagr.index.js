@@ -1,5 +1,5 @@
 import typescript from '//stacks/ts//dagr.stack.js'
-import { writeJson } from '//stacks/ts//dagr.file_utils.js'
+import { writeJson, writeYaml } from '//stacks/ts//dagr.file_utils.js'
 
 const IGNORE = ['node_modules', '.git', 'dist', 'docs']
 
@@ -89,6 +89,9 @@ const stack = typescript({
               steps: [
                 ...recipe.steps,
                 writeJson('/repo/tsconfig.build.json', TSCONFIG_BUILD),
+                writeYaml('/repo/pnpm-workspace.yaml', {
+                  allowBuilds: { esbuild: true },
+                }),
               ],
             }
           },
