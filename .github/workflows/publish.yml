@@ -86,4 +86,4 @@ jobs:
             *) dist_tag=latest ;;
           esac
           echo "publishing $version under dist-tag $dist_tag"
-          npm publish release/wyr.tgz --provenance --access public --tag "$dist_tag"
+          npm publish ./release/wyr.tgz --provenance --access public --tag "$dist_tag"
