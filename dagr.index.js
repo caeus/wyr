@@ -1,5 +1,5 @@
 import typescript from '//stacks/ts//dagr.stack.js'
-import { writeJson, writeYaml } from '//stacks/ts//dagr.file_utils.js'
+import { writeJson, writeText, writeYaml } from '//stacks/ts//dagr.file_utils.js'
 
 const IGNORE = ['node_modules', '.git', 'dist', 'docs']
 
@@ -55,6 +55,18 @@ const PRETTIER = {
   trailingComma: 'all',
 }
 
+const VITEST_CONFIG = `import { defineConfig } from 'vitest/config'
+
+export default defineConfig({
+  test: {
+    typecheck: {
+      enabled: true,
+    },
+    globals: true,
+  },
+})
+`
+
 const stack = typescript({
   base: 'base',
   scope: 'caeus',
@@ -89,6 +101,7 @@ const stack = typescript({
               steps: [
                 ...recipe.steps,
                 writeJson('/repo/tsconfig.build.json', TSCONFIG_BUILD),
+                writeText('/repo/vitest.config.ts', VITEST_CONFIG),
                 writeYaml('/repo/pnpm-workspace.yaml', {
                   allowBuilds: { esbuild: true },
                 }),
@@ -129,7 +142,6 @@ const stack = typescript({
             FROM: images.install,
             steps: [
               { COPY: { src: 'src', dest: '/repo/src' } },
-              { COPY: { src: 'vitest.config.ts', dest: '/repo/vitest.config.ts' } },
               { WORKDIR: '/repo' },
               { RUN: 'pnpm exec vitest run' },
             ],
@@ -207,7 +219,6 @@ export default stack({
       'typescript',
       'node',
     ],
-    files: ['dist/index.js', 'dist/index.d.ts', 'LICENSE', 'README.md'],
     author: 'caeus',
     license: 'MIT',
   },
