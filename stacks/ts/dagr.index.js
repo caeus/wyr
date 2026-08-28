@@ -1,4 +1,4 @@
-const STACKS_COMMIT = 'b4abcd3b66f14452aa6cbae543ddbf1ba20f7917'
+const STACKS_COMMIT = 'f5be0d05db833380c0f5051d04da68a5ef304ef1'
 
 export default {
   '/': {
@@ -11,12 +11,12 @@ export default {
           'cd /src',
           'git remote add origin https://github.com/caeus/dagr-stacks.git',
           'git sparse-checkout init --cone',
-          'git sparse-checkout set ts-library',
+          'git sparse-checkout set typescript',
           `git fetch --depth=1 --filter=blob:none origin ${STACKS_COMMIT}`,
           'git checkout --detach FETCH_HEAD',
         ].join(' && '),
       },
-      { WORKDIR: '/src/ts-library' },
+      { WORKDIR: '/src/typescript' },
     ],
     IGNORE: [],
   },

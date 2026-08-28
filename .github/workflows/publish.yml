@@ -43,12 +43,12 @@ jobs:
           git checkout --detach "refs/tags/$RELEASE_TAG"
 
       - name: Run checks and build package
-        run: ./.dagr/dagr run //:ci:pack //:ci:typecheck //:ci:docs
+        run: ./.dagr/dagr run //:publish:pack //:ci:typecheck //:ci:docs
 
       - name: Extract package
         run: |
           mkdir -p release
-          container="$(docker create ci-pack:latest)"
+          container="$(docker create publish-pack:latest)"
           trap 'docker rm -f "$container" >/dev/null' EXIT
           docker cp "$container:/out/." release/
           test -f release/wyr.tgz
