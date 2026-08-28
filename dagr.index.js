@@ -13,6 +13,7 @@ const VERSIONS = {
   '@tsconfig/strictest': '2.0.5',
   '@typescript-eslint/eslint-plugin': '8.8.1',
   '@typescript-eslint/parser': '8.8.1',
+  '@types/node': '22.7.5',
   'eslint': '9.12.0',
   'eslint-plugin-prettier': '5.2.1',
   'prettier': '3.3.3',
