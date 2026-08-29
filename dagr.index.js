@@ -1,17 +1,20 @@
-import typescript from '//stacks/ts//dagr.stack.js'
-import { writeJson, writeText, writeYaml } from '//stacks/ts//dagr.file_utils.js'
+import typescript, {
+  eslint,
+  library,
+  prettier,
+  typedoc,
+  vitest,
+} from '//stacks/ts//dagr.stack.js'
 
 const IGNORE = ['node_modules', '.git', 'dist', 'docs']
 
 const VERSIONS = {
-  '@eslint/eslintrc': '3.1.0',
   '@eslint/js': '9.12.0',
   '@tsconfig/strictest': '2.0.5',
-  '@types/node': '22.7.5',
   '@typescript-eslint/eslint-plugin': '8.8.1',
   '@typescript-eslint/parser': '8.8.1',
+  '@types/node': '22.7.5',
   'eslint': '9.12.0',
-  'eslint-config-prettier': '9.1.0',
   'eslint-plugin-prettier': '5.2.1',
   'prettier': '3.3.3',
   'typedoc': '0.28.13',
@@ -19,65 +22,12 @@ const VERSIONS = {
   'vitest': '2.1.3',
 }
 
-const TSCONFIG = {
-  extends: '@tsconfig/strictest/tsconfig.json',
-  include: ['src/**/*.ts'],
-  compilerOptions: {
-    target: 'ES2023',
-    module: 'NodeNext',
-    moduleResolution: 'NodeNext',
-    rootDir: 'src',
-    outDir: 'dist',
-    sourceMap: true,
-    inlineSources: true,
-    esModuleInterop: true,
-    forceConsistentCasingInFileNames: true,
-    useUnknownInCatchVariables: true,
-    skipLibCheck: true,
-    noEmit: true,
-    types: ['vitest/globals'],
-  },
-}
-
-const TSCONFIG_BUILD = {
-  extends: './tsconfig.json',
-  compilerOptions: {
-    declaration: true,
-    noEmit: false,
-  },
-  include: ['src/**/*.ts'],
-  exclude: ['src/**/*.test.ts', 'src/**/*.spec.ts'],
-}
-
-const PRETTIER = {
-  semi: true,
-  singleQuote: true,
-  trailingComma: 'all',
-}
-
-const VITEST_CONFIG = `import { defineConfig } from 'vitest/config'
-
-export default defineConfig({
-  test: {
-    typecheck: {
-      enabled: true,
-    },
-    globals: true,
-  },
-})
-`
-
 const stack = typescript({
   base: 'base',
   scope: 'caeus',
   versions: VERSIONS,
   ignore: IGNORE,
-  tsconfig: TSCONFIG,
-  prettier: PRETTIER,
   transform(index) {
-    const manifest = index.config.manifest
-    const manifestRun = manifest.run
-
     return {
       ...index,
       config: {
@@ -92,115 +42,26 @@ const stack = typescript({
           }),
         },
         ...index.config,
-        manifest: {
-          ...manifest,
-          run: context => {
-            const recipe = manifestRun(context)
-            return {
-              ...recipe,
-              steps: [
-                ...recipe.steps,
-                writeJson('/repo/tsconfig.build.json', TSCONFIG_BUILD),
-                writeText('/repo/vitest.config.ts', VITEST_CONFIG),
-                writeYaml('/repo/pnpm-workspace.yaml', {
-                  allowBuilds: { esbuild: true },
-                }),
-              ],
-            }
-          },
-        },
-      },
-      ci: {
-        ...index.ci,
-        typecheck: {
-          deps: ['build'],
-          run: ({ images }) => ({
-            FROM: images.build,
-            steps: [
-              { WORKDIR: '/repo' },
-              { RUN: 'pnpm exec tsc -p tsconfig.build.json --noEmit' },
-            ],
-            IGNORE,
-          }),
-        },
-        lint: {
-          deps: ['install'],
-          run: ({ images }) => ({
-            FROM: images.install,
-            steps: [
-              { COPY: { src: 'src', dest: '/repo/src' } },
-              { COPY: { src: 'eslint.config.mjs', dest: '/repo/eslint.config.mjs' } },
-              { WORKDIR: '/repo' },
-              { RUN: "pnpm exec eslint 'src/**/*.ts'" },
-            ],
-            IGNORE,
-          }),
-        },
-        test: {
-          deps: ['install'],
-          run: ({ images }) => ({
-            FROM: images.install,
-            steps: [
-              { COPY: { src: 'src', dest: '/repo/src' } },
-              { WORKDIR: '/repo' },
-              { RUN: 'pnpm exec vitest run' },
-            ],
-            IGNORE,
-          }),
-        },
-        build: {
-          deps: ['install', 'lint', 'test'],
-          run: ({ images }) => ({
-            FROM: images.install,
-            steps: [
-              { COPY: { src: 'src', dest: '/repo/src' } },
-              { COPY: { src: 'README.md', dest: '/repo/README.md' } },
-              { COPY: { src: 'LICENSE', dest: '/repo/LICENSE' } },
-              { WORKDIR: '/repo' },
-              { RUN: 'pnpm exec tsc -p tsconfig.build.json' },
-            ],
-            IGNORE,
-          }),
-        },
-        docs: {
-          deps: ['build'],
-          run: ({ images }) => ({
-            FROM: images.build,
-            steps: [
-              { COPY: { src: 'typedoc.json', dest: '/repo/typedoc.json' } },
-              { WORKDIR: '/repo' },
-              { RUN: 'pnpm exec typedoc --tsconfig tsconfig.build.json' },
-            ],
-            IGNORE,
-            EXPORT: { '/repo/docs/': 'docs/' },
-          }),
-        },
       },
     }
   },
 })
+  .with(library({
+    runtime: 'node',
+    language: 'ES2023',
+    sourceMaps: true,
+    assets: ['README.md', 'LICENSE'],
+  }))
+  .with(prettier({ semi: true, printWidth: 80, trailingComma: 'all' }))
+  .with(vitest({ globals: true, typecheck: true }))
+  .with(eslint({ prettier: true, explicitReturnTypes: true }))
+  .with(typedoc({ title: 'Wyr' }))
 
-// The current stack infers npm names from non-root logical locations. Supplying //wyr gives the
-// root package its real npm identity without coupling the mounted stack to this repository.
 export default stack({
   location: '//wyr',
   version: '0.0.0-rc2',
-  deps: [
-    { npm: '@eslint/eslintrc', at: 'dev' },
-    { npm: '@eslint/js', at: 'dev' },
-    { npm: '@types/node', at: 'dev' },
-    { npm: '@typescript-eslint/eslint-plugin', at: 'dev' },
-    { npm: '@typescript-eslint/parser', at: 'dev' },
-    { npm: 'eslint', at: 'dev' },
-    { npm: 'eslint-config-prettier', at: 'dev' },
-    { npm: 'eslint-plugin-prettier', at: 'dev' },
-    { npm: 'prettier', at: 'dev' },
-    { npm: 'typedoc', at: 'dev' },
-    { npm: 'vitest', at: 'dev' },
-  ],
-  packageJson: {
+  metadata: {
     description: 'Deterministic dependency graphs for TypeScript.',
-    private: false,
     repository: {
       type: 'git',
       url: 'git+https://github.com/caeus/wyr.git',
