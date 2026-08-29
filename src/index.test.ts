@@ -8,6 +8,8 @@ import {
   Ok,
   Resolved,
   ShakenGraph,
+  TaggedKeys,
+  TaggedValues,
   TransitiveKeys,
   ValidModule,
   toClass,
@@ -50,6 +52,8 @@ const typeTest = (s: string, _: () => void): void =>
 // Unique symbol and numeric keys — used to verify non-string key support
 const symKey: unique symbol = Symbol('symKey');
 const numKey: 0 = 0 as const;
+const handlerTag: unique symbol = Symbol('handlerTag');
+const symbolHandler: unique symbol = Symbol('symbolHandler');
 
 class Greeter {
   constructor(
@@ -73,6 +77,22 @@ const appModule = Module({
     b,
   ]),
 }).merge(baseModule);
+
+const taggedModule = Module({
+  prefix: toValue('handler:'),
+  alpha: toFactory(['prefix'], (prefix: string) => `${prefix}alpha`, [
+    handlerTag,
+  ]),
+  [symbolHandler]: toValue(42, [handlerTag]),
+  ignored: toValue(false),
+  handlers: toFactory(
+    ['prefix', { tag: handlerTag }],
+    (prefix: string, handlers: { alpha: string; [symbolHandler]: number }) => ({
+      prefix,
+      handlers,
+    }),
+  ),
+});
 
 describe('Module', () => {
   describe('compile (Container)', () => {
@@ -178,6 +198,114 @@ describe('Module', () => {
       const container = await appModule.shake(['greeting']).compile();
       expect(() => container.get('count' as never)).toThrow(
         /Key not in container/i,
+      );
+    });
+  });
+
+  describe('tags', () => {
+    test('injects all matching providers as a record', async () => {
+      const container = await taggedModule.shake(['handlers']).compile();
+      const result = container.get('handlers');
+
+      expect(result.prefix).toBe('handler:');
+      expect(result.handlers.alpha).toBe('handler:alpha');
+      expect(result.handlers[symbolHandler]).toBe(42);
+    });
+
+    test('an unmatched tag resolves to an empty record', async () => {
+      const module = Module({
+        bindings: toFactory([{ tag: 'missing' }], (bindings: {}) => bindings),
+      });
+
+      const container = await module.compile();
+      expect(Reflect.ownKeys(container.get('bindings'))).toStrictEqual([]);
+    });
+
+    test('provider tags can be supplied as a set', async () => {
+      const tag = Symbol('setTag');
+      const module = Module({
+        value: toValue(42, new Set([tag])),
+        values: toFactory([{ tag }], (values: { value: number }) => values),
+      });
+
+      const container = await module.compile();
+      expect(container.get('values')).toStrictEqual({ value: 42 });
+    });
+
+    test('resolves matching providers in parallel', async () => {
+      const module = Module({
+        first: toFactory(
+          [],
+          async () => {
+            await new Promise((resolve) => setTimeout(resolve, 120));
+            return 1;
+          },
+          ['item'],
+        ),
+        second: toFactory(
+          [],
+          async () => {
+            await new Promise((resolve) => setTimeout(resolve, 130));
+            return 2;
+          },
+          ['item'],
+        ),
+        values: toFactory(
+          [{ tag: 'item' }],
+          (values: { first: number; second: number }) => values,
+        ),
+      });
+
+      const start = performance.now();
+      const container = await module.shake(['values']).compile();
+      const elapsed = performance.now() - start;
+
+      expect(container.get('values')).toStrictEqual({ first: 1, second: 2 });
+      expect(elapsed).toBeLessThan(200);
+    });
+
+    test('shake retains tagged providers and their transitive deps', async () => {
+      const container = await taggedModule.shake(['handlers']).compile();
+
+      expect(container.get('alpha')).toBe('handler:alpha');
+      expect(container.get(symbolHandler)).toBe(42);
+      expect(container.get('prefix')).toBe('handler:');
+      expect(() => container.get('ignored' as never)).toThrow(
+        /Key not in container/i,
+      );
+    });
+
+    test('a replacement provider replaces its tags too', async () => {
+      const base = Module({
+        value: toValue(1, ['item']),
+        values: toFactory(
+          [{ tag: 'item' }],
+          (values: Record<PropertyKey, unknown>) => values,
+        ),
+      });
+      const replacement = Module({ value: toValue(2) });
+
+      const container = await base
+        .merge(replacement)
+        .shake(['values'])
+        .compile();
+      expect(Reflect.ownKeys(container.get('values'))).toStrictEqual([]);
+      expect(() => container.get('value' as never)).toThrow(
+        /Key not in container/i,
+      );
+    });
+
+    test('rejects cycles introduced through a tag dependency', async () => {
+      const cyclic = Module({
+        value: toFactory(
+          [{ tag: 'loop' }],
+          (values: Record<PropertyKey, unknown>) => values,
+          ['loop'],
+        ),
+      });
+
+      await expect((cyclic as any).compile()).rejects.toThrow(
+        /circular dependency/i,
       );
     });
   });
@@ -333,6 +461,67 @@ describe('Module', () => {
         >().toEqualTypeOf<false>();
       },
     );
+
+    typeTest('tag queries expose matching keys and resolved values', () => {
+      type Graph = typeof taggedModule extends Module<infer G> ? G : never;
+
+      expectTypeOf<TaggedKeys<Graph, typeof handlerTag>>().toEqualTypeOf<
+        'alpha' | typeof symbolHandler
+      >();
+      expectTypeOf<TaggedValues<Graph, typeof handlerTag>>().toEqualTypeOf<{
+        alpha: `${string}alpha`;
+        [symbolHandler]: 42;
+      }>();
+    });
+
+    typeTest('tag dependencies are graph edges', () => {
+      type Graph = typeof taggedModule extends Module<infer G> ? G : never;
+
+      expectTypeOf<TransitiveKeys<Graph, 'handlers'>>().toEqualTypeOf<
+        'handlers' | 'prefix' | 'alpha' | typeof symbolHandler
+      >();
+      expectTypeOf<keyof ShakenGraph<Graph, ['handlers']>>().toEqualTypeOf<
+        'handlers' | 'prefix' | 'alpha' | typeof symbolHandler
+      >();
+    });
+
+    typeTest('tag record mismatches are reported on the consumer', () => {
+      const mismatched = Module({
+        value: toValue(1, ['item']),
+        values: toFactory(
+          [{ tag: 'item' }],
+          (_values: { value: string }) => null,
+        ),
+      });
+
+      type Graph = typeof mismatched extends Module<infer G> ? G : never;
+      type Expected = {
+        values: {
+          taggedMismatched: {
+            item: { expected: { value: string }; got: { value: 1 } };
+          };
+        };
+      };
+
+      expectTypeOf<GraphErr<Graph>>().toMatchTypeOf<Expected>();
+      expectTypeOf<Expected>().toMatchTypeOf<GraphErr<Graph>>();
+    });
+
+    typeTest('cycles through tag edges are reported', () => {
+      const cyclic = Module({
+        value: toFactory(
+          [{ tag: 'loop' }],
+          (values: Record<PropertyKey, unknown>) => values,
+          ['loop'],
+        ),
+      });
+
+      expectTypeOf(errOf(cyclic)).toEqualTypeOf<{
+        value: { circular: readonly ['value', 'value'] };
+      }>();
+      // @ts-expect-error - tag edge makes the graph circular
+      cyclic.compile();
+    });
 
     typeTest(
       'shake(keys).compile() is a compile error only for keys with wiring errors',
