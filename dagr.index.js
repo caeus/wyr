@@ -52,7 +52,7 @@ const stack = typescript({
     sourceMaps: true,
     assets: ['README.md', 'LICENSE'],
   }))
-  .with(prettier({ semi: true, trailingComma: 'all' }))
+  .with(prettier({ semi: true, printWidth: 80, trailingComma: 'all' }))
   .with(vitest({ globals: true, typecheck: true }))
   .with(eslint({ prettier: true, explicitReturnTypes: true }))
   .with(typedoc({ title: 'Wyr' }))
