@@ -488,10 +488,10 @@ describe('Module', () => {
     typeTest('tag record mismatches are reported on the consumer', () => {
       const mismatched = Module({
         value: toValue(1, ['item']),
-        values: toFactory(
-          [{ tag: 'item' }],
-          (_values: { value: string }) => null,
-        ),
+        values: toFactory([{ tag: 'item' }], (values: { value: string }) => {
+          void values;
+          return null;
+        }),
       });
 
       type Graph = typeof mismatched extends Module<infer G> ? G : never;
@@ -505,6 +505,7 @@ describe('Module', () => {
 
       expectTypeOf<GraphErr<Graph>>().toMatchTypeOf<Expected>();
       expectTypeOf<Expected>().toMatchTypeOf<GraphErr<Graph>>();
+      void mismatched;
     });
 
     typeTest('cycles through tag edges are reported', () => {
