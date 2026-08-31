@@ -1,6 +1,6 @@
 type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
-// ─── Provider ────────────────────────────────────────────────────────────────
+// ─── Provider ───────────────────────────────────────────────────────────────
 
 class Provider<in In extends {}, out Out> {
   readonly deps: ReadonlySet<keyof In>;
