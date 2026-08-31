@@ -1,4 +1,4 @@
-const STACKS_COMMIT = '8a5b3993a41670697f317f77c29f2ba497266c3e'
+const STACKS_COMMIT = '921919d6ec43affc2f574620292c405688e79e53'
 
 export default {
   '/': {
