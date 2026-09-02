@@ -1,5 +1,7 @@
 # @caeus/wyr
 
+<img src="./wyr_logo.png" alt="wyr logo" width="160" />
+
 Deterministic dependency graphs for TypeScript.
 
 `@caeus/wyr` is a small dependency wiring library for explicit, immutable provider graphs. You declare providers up front, compose modules with `merge`, tree-shake with `shake`, and resolve everything with `compile`. The TypeScript type system validates missing dependencies, mismatched dependency types, and circular dependency graphs at the call site.
