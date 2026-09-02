@@ -19,34 +19,38 @@ import { Module, toClass, toFactory, toValue } from '@caeus/wyr';
 
 ## API at a glance
 
-| Export                | Purpose                                                                            |
-| --------------------- | ---------------------------------------------------------------------------------- |
-| `Module(providers)`   | Creates an immutable module from a record of providers.                            |
-| `toValue(value)`      | Registers a dependency-free constant or promise-backed value.                      |
-| `toFactory(keys, fn)` | Registers a factory whose positional arguments are resolved from `keys`.           |
-| `toClass(keys, ctor)` | Registers a class constructor whose positional arguments are resolved from `keys`. |
-| `GraphErr<Graph>`     | Type-level error map: every problematic key mapped to its problems. See below.     |
-| `AnyGraph`            | Base constraint for a record of providers; useful for generic utilities.           |
+| Export                       | Purpose                                                                                 |
+| ---------------------------- | --------------------------------------------------------------------------------------- |
+| `Module(providers)`          | Creates an immutable module from a record of providers.                                 |
+| `toValue(value, tags?)`      | Registers a dependency-free constant or promise-backed value.                           |
+| `toFactory(deps, fn, tags?)` | Registers a factory whose positional arguments are resolved from keys or tag selectors. |
+| `toClass(deps, ctor, tags?)` | Registers a class constructor with the same dependency and tag behavior.                |
+| `GraphErr<Graph>`            | Type-level error map: every problematic key mapped to its problems. See below.          |
+| `AnyGraph`                   | Base constraint for a record of providers; useful for generic utilities.                |
 
 Type-level only:
 
-| Export                  | Purpose                                                                                     |
-| ----------------------- | ------------------------------------------------------------------------------------------- |
-| `ValidModule<Exports>`  | Contract for a module that compiles and exposes at least `Exports`. See below.               |
-| `Compilation<Graph>`    | `Ok<Resolved<Graph>>` if the graph wires up, otherwise `Failed<GraphErr<Graph>>`.             |
-| `Resolved<Graph>`       | Maps each binding key to the type its provider resolves to.                                  |
-| `Ok<T>` / `Failed<E>`   | The two branches of a compilation result.                                                    |
-| `compilation`           | The phantom field key. Type-only — import it with `import type`.                              |
-| `ShakenGraph<G, Keys>`  | The transitive closure of `Keys` within `G`, as produced by `shake`.                          |
-| `TransitiveKeys<G, K>`  | `K` plus every key it transitively depends on.                                                |
+| Export                 | Purpose                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| `ValidModule<Exports>` | Contract for a module that compiles and exposes at least `Exports`. See below.    |
+| `Compilation<Graph>`   | `Ok<Resolved<Graph>>` if the graph wires up, otherwise `Failed<GraphErr<Graph>>`. |
+| `Resolved<Graph>`      | Maps each binding key to the type its provider resolves to.                       |
+| `Ok<T>` / `Failed<E>`  | The two branches of a compilation result.                                         |
+| `compilation`          | The phantom field key. Type-only — import it with `import type`.                  |
+| `ShakenGraph<G, Keys>` | The transitive closure of `Keys` within `G`, as produced by `shake`.              |
+| `TransitiveKeys<G, K>` | `K` plus every key it transitively depends on.                                    |
+| `TagDependency<Tag>`   | A `{ tag: Tag }` selector used as a factory or constructor dependency.            |
+| `Dependency`           | A direct `PropertyKey` dependency or a tag selector.                              |
+| `TaggedKeys<G, Tag>`   | The keys of every provider in `G` carrying `Tag`.                                 |
+| `TaggedValues<G, Tag>` | A record mapping every tagged provider key to its resolved value type.            |
 
 A module exposes:
 
-| Method          | Purpose                                                                                      |
-| --------------- | -------------------------------------------------------------------------------------------- |
-| `shake(keys)`   | Returns a new module scoped to the given keys and their transitive dependencies.             |
+| Method          | Purpose                                                                                        |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| `shake(keys)`   | Returns a new module scoped to the given keys and their transitive dependencies.               |
 | `compile()`     | Resolves all keys eagerly and returns a `Promise<Container>`. Each `.get(key)` is synchronous. |
-| `merge(module)` | Returns a new module where providers from the argument replace providers with the same keys. |
+| `merge(module)` | Returns a new module where providers from the argument replace providers with the same keys.   |
 
 ## Defining keys
 
@@ -97,6 +101,44 @@ await userRepo.findUser('42');
 ```
 
 `toFactory` receives dependencies as positional parameters in the same order as its key tuple. Factories may be synchronous or asynchronous.
+
+## Multibindings with tags
+
+A provider can carry any number of `PropertyKey` tags. Pass them as an array or readonly set. A dependency written as `{ tag }` resolves every provider carrying that tag and injects a record keyed by the providers' actual binding keys.
+
+```ts
+const handler = Symbol('handler');
+
+const app = Module({
+  json: toValue((input: string) => JSON.parse(input), [handler]),
+  text: toValue((input: string) => input, [handler]),
+
+  handlers: toFactory(
+    [{ tag: handler }],
+    (handlers: {
+      json: (input: string) => unknown;
+      text: (input: string) => string;
+    }) => handlers,
+  ),
+});
+
+const container = await app.shake(['handlers']).compile();
+container.get('handlers').json('{"ready":true}');
+```
+
+Tag selection has these semantics:
+
+- matching providers are resolved concurrently,
+- an unmatched tag injects `{}`,
+- the record is unordered,
+- string and symbol binding keys are preserved, while number keys follow JavaScript's normal string coercion,
+- `shake` retains all matching providers and their transitive dependencies,
+- a provider that depends on one of its own tags forms a cycle, and
+- replacing a provider with `merge` replaces its tags too.
+
+Use `Reflect.ownKeys(record)` when you need to enumerate symbol-keyed bindings. `Object.keys`, `Object.values`, and `Object.entries` only include enumerable string keys.
+
+Tag records are statically checked when the factory parameter is annotated. `TaggedKeys<Graph, Tag>` and `TaggedValues<Graph, Tag>` expose the same selection at the type level.
 
 ## Tree-shaking with `shake`
 
@@ -165,6 +207,7 @@ TypeScript checks that:
 - every requested key exists in the module,
 - every transitive dependency key exists,
 - dependency output types satisfy the factory parameter types, and
+- tagged records satisfy their factory parameter types,
 - dependency graphs are not circular.
 
 ```ts
@@ -194,12 +237,13 @@ Runtime guards still reject missing providers and circular dependencies if you b
 
 `GraphErr<Graph>` maps each problematic key to a record of that key's problems. Keys with no problems do not appear, so a valid graph yields `{}`. Keys that are only *depended upon* appear too, even though no provider registers them — that is where an unprovided dependency is reported.
 
-| Field         | Meaning                                                         | Payload                               |
-| ------------- | --------------------------------------------------------------- | ------------------------------------- |
-| `unprovided`  | Nothing in the graph provides this key.                          | `{ requiredBy }` — union of requesters |
-| `unmet`       | A dependency of this key has problems of its own.                | union of the offending dep keys        |
-| `mismatched`  | A dependency resolves to a type this key cannot accept.          | record keyed by dep: `{ expected, got }` |
-| `circular`    | This key participates in a dependency cycle.                     | the cycle, rotated to start on this key |
+| Field              | Meaning                                                   | Payload                                  |
+| ------------------ | --------------------------------------------------------- | ---------------------------------------- |
+| `unprovided`       | Nothing in the graph provides this key.                   | `{ requiredBy }` — union of requesters   |
+| `unmet`            | A dependency of this key has problems of its own.         | union of the offending dep keys          |
+| `mismatched`       | A dependency resolves to a type this key cannot accept.   | record keyed by dep: `{ expected, got }` |
+| `taggedMismatched` | A tag record does not satisfy the factory parameter type. | record keyed by tag: `{ expected, got }` |
+| `circular`         | This key participates in a dependency cycle.              | the cycle, rotated to start on this key  |
 
 ```ts
 const app = Module({

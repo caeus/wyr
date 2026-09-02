@@ -2,27 +2,55 @@ type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
 // ─── Provider ────────────────────────────────────────────────────────────────
 
-class Provider<in In extends {}, out Out> {
-  readonly deps: ReadonlySet<keyof In>;
-  readonly #factory: (deps: In) => Promise<Out>;
+export type TagDependency<Tag extends PropertyKey = PropertyKey> = Readonly<{
+  tag: Tag;
+}>;
+
+export type Dependency = PropertyKey | TagDependency;
+
+type TagCollection = readonly PropertyKey[] | ReadonlySet<PropertyKey>;
+type TagsOf<Tags extends TagCollection> =
+  Tags extends ReadonlySet<infer Tag extends PropertyKey>
+    ? Tag
+    : Tags extends readonly (infer Tag extends PropertyKey)[]
+      ? Tag
+      : never;
+
+class Provider<
+  in In extends {},
+  out Out,
+  out Tags extends PropertyKey,
+  in TaggedIn extends {},
+> {
+  readonly deps: readonly Dependency[];
+  readonly tags: ReadonlySet<Tags>;
+  readonly #factory: (deps: In, tagged: TaggedIn) => Promise<Out>;
 
   constructor(
-    deps: ReadonlySet<keyof In>,
-    factory: (deps: In) => Promise<Out>,
+    deps: readonly Dependency[],
+    tags: Iterable<PropertyKey>,
+    factory: (deps: In, tagged: TaggedIn) => Promise<Out>,
   ) {
-    this.deps = deps;
+    this.deps = [...deps];
+    this.tags = new Set(tags) as unknown as ReadonlySet<Tags>;
     this.#factory = factory;
   }
 
-  call(deps: In): Promise<Out> {
-    return this.#factory(deps);
+  call(deps: In, tagged: TaggedIn): Promise<Out> {
+    return this.#factory(deps, tagged);
   }
 }
-type AnyProvider = Provider<never, unknown>;
+type AnyProvider = Provider<never, unknown, PropertyKey, never>;
 type ProviderIn<P extends AnyProvider> =
-  P extends Provider<infer I, unknown> ? I : never;
+  P extends Provider<infer I, unknown, PropertyKey, never> ? I : never;
 type ProviderOut<P extends AnyProvider> =
-  P extends Provider<never, infer O> ? O : unknown;
+  P extends Provider<never, infer O, PropertyKey, never> ? O : unknown;
+type ProviderTags<P extends AnyProvider> =
+  P extends Provider<never, unknown, infer Tags, never> ? Tags : never;
+type ProviderTaggedIn<P extends AnyProvider> =
+  P extends Provider<never, unknown, PropertyKey, infer TaggedIn>
+    ? TaggedIn
+    : never;
 
 // ─── Graph ───────────────────────────────────────────────────────────────────
 
@@ -41,55 +69,105 @@ type MergeGraphs<G extends AnyGraph, N extends AnyGraph> = {
 
 // ─── Builder helpers ─────────────────────────────────────────────────────────
 
-type ZipKeysToParams<
-  Keys extends readonly PropertyKey[],
+type ZipDependenciesToParams<
+  Dependencies extends readonly Dependency[],
   Params extends readonly unknown[],
-> = Keys extends readonly []
+> = Dependencies extends readonly []
   ? {}
-  : Keys extends readonly [
-        infer K extends PropertyKey,
-        ...infer KTail extends readonly PropertyKey[],
+  : Dependencies extends readonly [
+        infer Head,
+        ...infer DependencyTail extends readonly Dependency[],
       ]
     ? Params extends readonly [
         infer P,
         ...infer PTail extends readonly unknown[],
       ]
-      ? { readonly [_ in K]: P } & ZipKeysToParams<KTail, PTail>
+      ? Head extends PropertyKey
+        ? { readonly [_ in Head]: P } & ZipDependenciesToParams<
+            DependencyTail,
+            PTail
+          >
+        : ZipDependenciesToParams<DependencyTail, PTail>
       : {}
     : {};
 
-export const toValue = <const T>(value: T | Promise<T>): Provider<{}, T> =>
-  new Provider(new Set(), async () => value);
+type ZipTagsToParams<
+  Dependencies extends readonly Dependency[],
+  Params extends readonly unknown[],
+> = Dependencies extends readonly []
+  ? {}
+  : Dependencies extends readonly [
+        infer Head,
+        ...infer DependencyTail extends readonly Dependency[],
+      ]
+    ? Params extends readonly [
+        infer P,
+        ...infer PTail extends readonly unknown[],
+      ]
+      ? Head extends TagDependency<infer Tag>
+        ? { readonly [_ in Tag]: P } & ZipTagsToParams<DependencyTail, PTail>
+        : ZipTagsToParams<DependencyTail, PTail>
+      : {}
+    : {};
+
+const isTagDependency = (dependency: Dependency): dependency is TagDependency =>
+  typeof dependency === 'object' && dependency !== null && 'tag' in dependency;
+
+export const toValue = <
+  const T,
+  const Tags extends TagCollection = readonly [],
+>(
+  value: T | Promise<T>,
+  tags: Tags = [] as unknown as Tags,
+): Provider<{}, T, TagsOf<Tags>, {}> =>
+  new Provider<{}, T, TagsOf<Tags>, {}>([], tags, async () => value);
 
 export const toFactory = <
-  const Keys extends readonly PropertyKey[],
+  const Dependencies extends readonly Dependency[],
   const Out,
-  const Params extends { readonly [I in keyof Keys]: unknown },
+  const Params extends { readonly [I in keyof Dependencies]: unknown },
+  const Tags extends TagCollection = readonly [],
 >(
-  keys: Keys,
+  dependencies: Dependencies,
   fn: (...args: Params) => Promise<Out> | Out,
-): Provider<Simplify<ZipKeysToParams<Keys, Params>>, Out> =>
-  new Provider(
-    new Set(keys) as unknown as ReadonlySet<
-      keyof Simplify<ZipKeysToParams<Keys, Params>>
-    >,
-    async (deps) =>
-      fn(
-        ...(keys.map(
-          (k) => (deps as Record<PropertyKey, unknown>)[k],
-        ) as unknown as Params),
-      ),
-  ) as unknown as Provider<Simplify<ZipKeysToParams<Keys, Params>>, Out>;
+  tags: Tags = [] as unknown as Tags,
+): Provider<
+  Simplify<ZipDependenciesToParams<Dependencies, Params>>,
+  Out,
+  TagsOf<Tags>,
+  Simplify<ZipTagsToParams<Dependencies, Params>>
+> =>
+  new Provider(dependencies, tags, async (deps, tagged) =>
+    fn(
+      ...(dependencies.map((dependency) =>
+        isTagDependency(dependency)
+          ? (tagged as Record<PropertyKey, unknown>)[dependency.tag]
+          : (deps as Record<PropertyKey, unknown>)[dependency],
+      ) as unknown as Params),
+    ),
+  ) as unknown as Provider<
+    Simplify<ZipDependenciesToParams<Dependencies, Params>>,
+    Out,
+    TagsOf<Tags>,
+    Simplify<ZipTagsToParams<Dependencies, Params>>
+  >;
 
 export const toClass = <
-  const Keys extends readonly PropertyKey[],
+  const Dependencies extends readonly Dependency[],
   const Out,
-  const Params extends { readonly [I in keyof Keys]: unknown },
+  const Params extends { readonly [I in keyof Dependencies]: unknown },
+  const Tags extends TagCollection = readonly [],
 >(
-  keys: Keys,
+  dependencies: Dependencies,
   ctor: new (...args: Params) => Out,
-): Provider<Simplify<ZipKeysToParams<Keys, Params>>, Out> =>
-  toFactory(keys, async (...args: Params) => new ctor(...args));
+  tags: Tags = [] as unknown as Tags,
+): Provider<
+  Simplify<ZipDependenciesToParams<Dependencies, Params>>,
+  Out,
+  TagsOf<Tags>,
+  Simplify<ZipTagsToParams<Dependencies, Params>>
+> =>
+  toFactory(dependencies, async (...args: Params) => new ctor(...args), tags);
 
 // ─── Result ──────────────────────────────────────────────────────────────────
 
@@ -105,6 +183,32 @@ type DepsOf<
   Graph extends AnyGraph,
   K extends PropertyKey,
 > = K extends keyof Graph ? keyof ProviderIn<Graph[K]> & PropertyKey : never;
+
+export type TaggedKeys<Graph extends AnyGraph, Tag extends PropertyKey> = {
+  [K in keyof Graph]: Tag extends ProviderTags<Graph[K]> ? K : never;
+}[keyof Graph];
+
+export type TaggedValues<
+  Graph extends AnyGraph,
+  Tag extends PropertyKey,
+> = Simplify<{
+  [K in TaggedKeys<Graph, Tag>]: ProviderOut<Graph[K]>;
+}>;
+
+type TaggedDepsOf<
+  Graph extends AnyGraph,
+  K extends PropertyKey,
+> = K extends keyof Graph
+  ? {
+      [Tag in keyof ProviderTaggedIn<Graph[K]>]: Tag extends PropertyKey
+        ? TaggedKeys<Graph, Tag>
+        : never;
+    }[keyof ProviderTaggedIn<Graph[K]>]
+  : never;
+
+type EdgesOf<Graph extends AnyGraph, K extends PropertyKey> =
+  | DepsOf<Graph, K>
+  | TaggedDepsOf<Graph, K>;
 
 type Expects<
   Graph extends AnyGraph,
@@ -133,6 +237,17 @@ type MismatchedDeps<Graph extends AnyGraph, K extends keyof Graph> = {
   };
 };
 
+type MismatchedTags<Graph extends AnyGraph, K extends keyof Graph> = {
+  [Tag in keyof ProviderTaggedIn<Graph[K]> as Tag extends PropertyKey
+    ? TaggedValues<Graph, Tag> extends ProviderTaggedIn<Graph[K]>[Tag]
+      ? never
+      : Tag
+    : never]: {
+    expected: ProviderTaggedIn<Graph[K]>[Tag];
+    got: Tag extends PropertyKey ? TaggedValues<Graph, Tag> : never;
+  };
+};
+
 // Walks from Origin looking for a path back to it; the path is the cycle.
 type CycleFrom<
   Graph extends AnyGraph,
@@ -140,12 +255,12 @@ type CycleFrom<
   K extends PropertyKey,
   Seen extends readonly PropertyKey[],
 > = {
-  [D in DepsOf<Graph, K>]: D extends Origin
+  [D in EdgesOf<Graph, K>]: D extends Origin
     ? readonly [...Seen, K, Origin]
     : D extends Seen[number] | K
       ? never
       : CycleFrom<Graph, Origin, D, readonly [...Seen, K]>;
-}[DepsOf<Graph, K>];
+}[EdgesOf<Graph, K>];
 
 type UnprovidedErr<
   Graph extends AnyGraph,
@@ -163,6 +278,15 @@ type MismatchedErr<
     : { mismatched: Simplify<MismatchedDeps<Graph, K>> }
   : {};
 
+type TaggedMismatchedErr<
+  Graph extends AnyGraph,
+  K extends PropertyKey,
+> = K extends keyof Graph
+  ? [keyof MismatchedTags<Graph, K>] extends [never]
+    ? {}
+    : { taggedMismatched: Simplify<MismatchedTags<Graph, K>> }
+  : {};
+
 type CircularErr<Graph extends AnyGraph, K extends PropertyKey> = [
   CycleFrom<Graph, K, K, readonly []>,
 ] extends [never]
@@ -175,6 +299,7 @@ type OwnErr<Graph extends AnyGraph, K extends PropertyKey> = UnprovidedErr<
   K
 > &
   MismatchedErr<Graph, K> &
+  TaggedMismatchedErr<Graph, K> &
   CircularErr<Graph, K>;
 
 type HasErr<
@@ -183,10 +308,10 @@ type HasErr<
   Seen extends readonly PropertyKey[],
 > = [keyof OwnErr<Graph, K>] extends [never]
   ? true extends {
-      [D in DepsOf<Graph, K>]: D extends Seen[number]
+      [D in EdgesOf<Graph, K>]: D extends Seen[number]
         ? false
         : HasErr<Graph, D, readonly [...Seen, K]>;
-    }[DepsOf<Graph, K>]
+    }[EdgesOf<Graph, K>]
     ? true
     : false
   : true;
@@ -212,12 +337,12 @@ type CycleMembers<Graph extends AnyGraph, K extends PropertyKey> = Members<
 // A cycle member's partners are already explained by `circular`; reporting them
 // as unmet too would double every cycle entry.
 type FailedDeps<Graph extends AnyGraph, K extends PropertyKey> = {
-  [D in DepsOf<Graph, K>]: D extends CycleMembers<Graph, K>
+  [D in EdgesOf<Graph, K>]: D extends CycleMembers<Graph, K>
     ? never
     : HasErr<Graph, D, readonly [K]> extends true
       ? D
       : never;
-}[DepsOf<Graph, K>];
+}[EdgesOf<Graph, K>];
 
 type KeyErr<Graph extends AnyGraph, K extends PropertyKey> = Simplify<
   OwnErr<Graph, K> & Unmet<Graph, K>
@@ -237,7 +362,7 @@ export type TransitiveKeys<
 > = K extends keyof Graph
   ?
       | K
-      | (keyof ProviderIn<Graph[K]> extends infer D
+      | (EdgesOf<Graph, K> extends infer D
           ? D extends keyof Graph
             ? TransitiveKeys<Graph, D>
             : never
@@ -294,6 +419,14 @@ export interface ValidModule<Exports extends {} = {}> {
 type URegistry = Record<PropertyKey, AnyProvider>;
 type UCache = Map<PropertyKey, Promise<unknown>>;
 
+const registryKeys = (registry: URegistry): PropertyKey[] =>
+  (Object.keys(registry) as PropertyKey[]).concat(
+    Object.getOwnPropertySymbols(registry),
+  );
+
+const taggedKeys = (registry: URegistry, tag: PropertyKey): PropertyKey[] =>
+  registryKeys(registry).filter((key) => registry[key]?.tags.has(tag));
+
 const resolve = async (
   key: PropertyKey,
   registry: URegistry,
@@ -312,12 +445,45 @@ const resolve = async (
   }
 
   const nextTrace = [...trace, key];
-  const promise = Promise.all(
-    [...provider.deps].map(
-      async (depKey) =>
-        [depKey, await resolve(depKey, registry, cache, nextTrace)] as const,
+  const directKeys = [
+    ...new Set(
+      provider.deps.filter(
+        (dependency): dependency is PropertyKey => !isTagDependency(dependency),
+      ),
     ),
-  ).then((entries) => provider.call(Object.fromEntries(entries) as never));
+  ];
+  const tags = [
+    ...new Set(
+      provider.deps.filter(isTagDependency).map((dependency) => dependency.tag),
+    ),
+  ];
+  const promise = Promise.all([
+    Promise.all(
+      directKeys.map(
+        async (depKey) =>
+          [depKey, await resolve(depKey, registry, cache, nextTrace)] as const,
+      ),
+    ),
+    Promise.all(
+      tags.map(async (tag) => {
+        const entries = await Promise.all(
+          taggedKeys(registry, tag).map(
+            async (depKey) =>
+              [
+                depKey,
+                await resolve(depKey, registry, cache, nextTrace),
+              ] as const,
+          ),
+        );
+        return [tag, Object.fromEntries(entries)] as const;
+      }),
+    ),
+  ]).then(([deps, tagged]) =>
+    provider.call(
+      Object.fromEntries(deps) as never,
+      Object.fromEntries(tagged) as never,
+    ),
+  );
 
   cache.set(key, promise);
   return promise;
@@ -368,7 +534,14 @@ class InternalModule<Graph extends AnyGraph> implements Module<Graph> {
       visited.add(key);
       const provider = this.#registry[key];
       if (provider) {
-        for (const dep of provider.deps) visit(dep);
+        for (const dependency of provider.deps) {
+          if (isTagDependency(dependency)) {
+            for (const tagged of taggedKeys(this.#registry, dependency.tag))
+              visit(tagged);
+          } else {
+            visit(dependency);
+          }
+        }
       }
     };
     for (const k of keys) visit(k as PropertyKey);
@@ -381,9 +554,7 @@ class InternalModule<Graph extends AnyGraph> implements Module<Graph> {
 
   compile(): Promise<Container<{ [K in keyof Graph]: ProviderOut<Graph[K]> }>>;
   async compile(): Promise<Container<Record<PropertyKey, unknown>>> {
-    const targets = (Object.keys(this.#registry) as PropertyKey[]).concat(
-      Object.getOwnPropertySymbols(this.#registry),
-    );
+    const targets = registryKeys(this.#registry);
     const cache: UCache = new Map();
     await Promise.all(
       targets.map((k) => resolve(k, this.#registry, cache, [])),
