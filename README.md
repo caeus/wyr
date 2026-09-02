@@ -1,6 +1,7 @@
+<img src="./wyr_logo.png" alt="wyr logo" width="100%" />
+
 # @caeus/wyr
 
-<img src="./wyr_logo.png" alt="wyr logo" width="100%" />
 
 Deterministic dependency graphs for TypeScript.
 
